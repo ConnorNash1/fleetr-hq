@@ -314,8 +314,15 @@ async function adminRequest(path, { method = "GET", body } = {}) {
 // Hardcoded until there is a feature catalogue. A key with no company_features
 // row is off, which is what the table's default means too.
 const FEATURES = [
-  { key: "ai_command_bar",    label: "AI command bar" },
-  { key: "insurance_rentals", label: "Insurance rentals" },
+  { key: "ai_command_bar",      label: "AI command bar" },
+  { key: "insurance_rentals",   label: "Insurance rentals" },
+  { key: "damage_claims",       label: "Damage claims" },
+  { key: "non_drive_intake",    label: "Non-drive intake" },
+  { key: "pre_rental_check",    label: "Pre-rental check" },
+  { key: "unknown_repair_date", label: "Unknown repair date" },
+  { key: "no_shows",            label: "No-shows" },
+  { key: "reports",             label: "Reports" },
+  { key: "audit_log",           label: "Audit log" },
 ];
 
 // The editable fields, in display order. `nullable` fields are cleared by
