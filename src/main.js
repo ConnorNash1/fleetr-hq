@@ -171,18 +171,143 @@ function LoginScreen({ onSuccess, notice }) {
         error && h("div", { className: "loginError", role: "alert" }, error))));
 }
 
-// Placeholder. Names as plain text, nothing else, until the real list is built.
-function CompanyListScreen({ companies, onSignOut }) {
+// ─── Creating a company ───────────────────────────────────────────────────────
+// Returns { ok, company } or { ok: false, message }. Never throws. The message
+// is the Worker's own when it sent one: it already words each refusal for a
+// person, and a second table of reasons here would only drift from it.
+async function createCompany(name) {
+  const session = supabase.auth.session();
+  if (!session) return { ok: false, message: "Your session has ended. Sign in again." };
+  let res;
+  try {
+    res = await fetch(`${ADMIN_API_URL}/admin/companies`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) {
+    console.warn("fleetr hq create company failed:", e.message || String(e));
+    return { ok: false, message: REASONS.network };
+  }
+  const body = await res.json().catch(() => null);
+  if (res.ok && body && body.ok && body.company) return { ok: true, company: body.company };
+  console.warn("fleetr hq create company refused:", res.status);
+  return { ok: false, message: (body && body.message) || `Could not create the company (${res.status}).` };
+}
+
+// ─── Routing ──────────────────────────────────────────────────────────────────
+// Two routes, so a hash listener rather than react-router. Hash-based for the
+// same reason internal uses HashRouter: GitHub Pages serves one file and would
+// 404 on any real path.
+function useHashRoute() {
+  const [hash, setHash] = React.useState(window.location.hash);
+  React.useEffect(() => {
+    const onChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  const m = hash.match(/^#\/company\/([^/?#]+)$/);
+  return m ? { name: "company", id: decodeURIComponent(m[1]) } : { name: "list" };
+}
+
+// ─── Screens: signed in ───────────────────────────────────────────────────────
+const STATUS_LABELS = { trial: "Trial", active: "Active", suspended: "Suspended" };
+
+function StatusBadge({ status }) {
+  return h("span", { className: `badge badge-${STATUS_LABELS[status] ? status : "unknown"}` },
+    STATUS_LABELS[status] || status || "Unknown");
+}
+
+function NewCompanyForm({ onCreated, onCancel }) {
+  const [name,   setName]   = React.useState("");
+  const [error,  setError]  = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) { setError("Enter a company name."); return; }
+    setSaving(true);
+    setError("");
+    createCompany(trimmed)
+      .then((result) => {
+        if (result.ok) { onCreated(result.company); return; }
+        setError(result.message);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  return h("form", { className: "newCompany", onSubmit: handleSubmit },
+    h("label", { className: "loginLabel", htmlFor: "newCompanyName" }, "Company name"),
+    h("div", { className: "newCompanyRow" },
+      h("input", {
+        id: "newCompanyName", className: "loginInput", type: "text", autoFocus: true,
+        maxLength: 200, value: name, disabled: saving,
+        onChange: (e) => { setName(e.target.value); setError(""); },
+        onKeyDown: (e) => { if (e.key === "Escape") onCancel(); },
+      }),
+      h("button", { type: "submit", className: "primaryBtn", disabled: saving },
+        saving ? "Creating…" : "Create"),
+      h("button", { type: "button", className: "linkBtn", onClick: onCancel, disabled: saving }, "Cancel")),
+    error && h("div", { className: "loginError", role: "alert" }, error));
+}
+
+function CompanyListScreen({ companies, onCreated }) {
+  const [creating, setCreating] = React.useState(false);
+
+  return h(React.Fragment, null,
+    h("div", { className: "titleRow" },
+      h("h1", { className: "pageTitle" }, "Companies"),
+      !creating && h("button", { type: "button", className: "primaryBtn", onClick: () => setCreating(true) },
+        "New Company")),
+    creating && h(NewCompanyForm, {
+      onCreated: (company) => { onCreated(company); setCreating(false); },
+      onCancel: () => setCreating(false),
+    }),
+    companies.length === 0
+      ? h("p", { className: "muted" }, "No companies yet.")
+      : h("div", { className: "tableWrap" },
+          h("table", { className: "companyTable" },
+            h("thead", null,
+              h("tr", null,
+                h("th", { scope: "col" }, "Name"),
+                h("th", { scope: "col" }, "Status"),
+                h("th", { scope: "col" }, "Plan"))),
+            h("tbody", null,
+              companies.map((c) => h("tr", { key: c.id },
+                h("td", null,
+                  h("a", { className: "companyLink", href: `#/company/${encodeURIComponent(c.id)}` }, c.name)),
+                h("td", null, h(StatusBadge, { status: c.status })),
+                h("td", null, c.planTier || h("span", { className: "muted" }, "Not set"))))))));
+}
+
+// Placeholder until the detail page is built. Exists so a row's link lands
+// somewhere sensible rather than on a blank screen.
+function CompanyDetailPlaceholder({ company }) {
+  return h(React.Fragment, null,
+    h("a", { className: "linkBtn backLink", href: "#/" }, "Back to companies"),
+    h("h1", { className: "pageTitle" }, company ? company.name : "Company not found"),
+    h("p", { className: "muted" }, "The company detail page is not built yet."));
+}
+
+function SignedInShell({ companies, onCreated, onSignOut }) {
+  const route = useHashRoute();
+  const signOut = () => {
+    // So the next sign-in starts on the list, not on whichever company was open.
+    if (window.location.hash) window.location.hash = "";
+    onSignOut();
+  };
   return h("div", { className: "page" },
     h("header", { className: "pageHeader" },
-      h(Wordmark),
-      h("button", { type: "button", className: "linkBtn", onClick: onSignOut }, "Sign out")),
+      h("a", { href: "#/", className: "homeLink" }, h(Wordmark)),
+      h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out")),
     h("main", { className: "pageBody" },
-      h("h1", { className: "pageTitle" }, "Company list"),
-      companies.length === 0
-        ? h("p", { className: "muted" }, "No companies yet.")
-        : h("ul", { className: "plainList" },
-            companies.map((c) => h("li", { key: c.id }, c.name)))));
+      route.name === "company"
+        ? h(CompanyDetailPlaceholder, { company: companies.find((c) => c.id === route.id) })
+        : h(CompanyListScreen, { companies, onCreated })));
 }
 
 function App() {
@@ -211,7 +336,12 @@ function App() {
   if (companies === null) {
     return h(LoginScreen, { onSuccess: (list) => { setNotice(""); setCompanies(list); }, notice });
   }
-  return h(CompanyListScreen, { companies, onSignOut: signOut });
+  return h(SignedInShell, {
+    companies,
+    // Appended, since the Worker lists in creation order.
+    onCreated: (company) => setCompanies((list) => [...list, company]),
+    onSignOut: signOut,
+  });
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
@@ -246,10 +376,43 @@ const css = `
   padding-bottom:16px;border-bottom:2px solid var(--green)}
 .pageBody{padding-top:24px}
 .pageTitle{font-size:1.25rem;font-weight:600;margin:0 0 16px}
-.plainList{margin:0;padding:0;list-style:none;line-height:1.9}
 .linkBtn{font:inherit;font-weight:500;color:var(--text);background:none;border:0;cursor:pointer;
   text-decoration:underline;text-decoration-color:var(--periwinkle);text-decoration-thickness:2px;
   text-underline-offset:4px}
+.linkBtn:disabled{opacity:0.5;cursor:default}
+.homeLink{color:inherit;text-decoration:none}
+.backLink{display:inline-block;margin-bottom:16px}
+
+.titleRow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.titleRow .pageTitle{margin:0}
+.primaryBtn{font:inherit;font-weight:600;color:#000;background:var(--periwinkle);border:0;
+  border-radius:999px;padding:9px 18px;cursor:pointer;white-space:nowrap}
+.primaryBtn:hover{filter:brightness(1.05)}
+.primaryBtn:focus-visible{outline:2px solid #000;outline-offset:2px}
+.primaryBtn:disabled{opacity:0.6;cursor:default}
+
+.newCompany{margin-bottom:24px;padding:16px;border:1px solid var(--border);border-radius:var(--radius)}
+.newCompanyRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.newCompanyRow .loginInput{flex:1;min-width:200px;margin:0}
+.newCompany .loginError{margin-top:12px}
+
+.tableWrap{overflow-x:auto}
+.companyTable{width:100%;border-collapse:collapse}
+.companyTable th{text-align:left;font-size:0.75rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:0.04em;color:var(--muted);padding:0 12px 10px;border-bottom:1px solid var(--border)}
+.companyTable td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.companyTable th:first-child,.companyTable td:first-child{padding-left:0}
+.companyTable tbody tr:hover{background:rgba(123,147,255,0.06)}
+.companyLink{color:var(--text);font-weight:500;text-decoration:none}
+.companyLink:hover,.companyLink:focus-visible{text-decoration:underline;
+  text-decoration-color:var(--periwinkle);text-decoration-thickness:2px;text-underline-offset:4px}
+
+.badge{display:inline-block;font-size:0.8rem;font-weight:500;padding:2px 10px;border-radius:999px;
+  border:1px solid transparent}
+.badge-trial{background:rgba(123,147,255,0.16);border-color:var(--periwinkle)}
+.badge-active{background:rgba(107,203,119,0.18);border-color:var(--green)}
+.badge-suspended{background:rgba(244,132,95,0.16);border-color:var(--terracotta)}
+.badge-unknown{background:rgba(0,0,0,0.05);border-color:var(--border)}
 `;
 const style = document.createElement("style");
 style.textContent = css;
