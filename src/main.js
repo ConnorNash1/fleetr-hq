@@ -284,16 +284,199 @@ function CompanyListScreen({ companies, onCreated }) {
                 h("td", null, c.planTier || h("span", { className: "muted" }, "Not set"))))))));
 }
 
-// Placeholder until the detail page is built. Exists so a row's link lands
-// somewhere sensible rather than on a blank screen.
-function CompanyDetailPlaceholder({ company }) {
-  return h(React.Fragment, null,
-    h("a", { className: "linkBtn backLink", href: "#/" }, "Back to companies"),
-    h("h1", { className: "pageTitle" }, company ? company.name : "Company not found"),
-    h("p", { className: "muted" }, "The company detail page is not built yet."));
+// ─── Company detail ───────────────────────────────────────────────────────────
+// Every call on this page goes through here. Returns { ok, body } or
+// { ok: false, message }. Never throws. As with createCompany, a failure
+// carries the Worker's own message when it sent one.
+async function adminRequest(path, { method = "GET", body } = {}) {
+  const session = supabase.auth.session();
+  if (!session) return { ok: false, message: "Your session has ended. Sign in again." };
+  let res;
+  try {
+    res = await fetch(`${ADMIN_API_URL}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    console.warn(`fleetr hq ${method} ${path} failed:`, e.message || String(e));
+    return { ok: false, message: REASONS.network };
+  }
+  const json = await res.json().catch(() => null);
+  if (res.ok && json && json.ok) return { ok: true, body: json };
+  console.warn(`fleetr hq ${method} ${path} refused:`, res.status);
+  return { ok: false, message: (json && json.message) || `The request failed (${res.status}).` };
 }
 
-function SignedInShell({ companies, onCreated, onSignOut }) {
+// Hardcoded until there is a feature catalogue. A key with no company_features
+// row is off, which is what the table's default means too.
+const FEATURES = [
+  { key: "ai_command_bar",    label: "AI command bar" },
+  { key: "insurance_rentals", label: "Insurance rentals" },
+];
+
+// The editable fields, in display order. `nullable` fields are cleared by
+// saving them empty, which is sent as null; name cannot be empty.
+const DETAIL_FIELDS = [
+  { key: "name",         label: "Company name",  type: "text",  maxLength: 200 },
+  { key: "status",       label: "Status",        type: "select" },
+  { key: "planTier",     label: "Plan tier",     type: "text",  maxLength: 64,  nullable: true },
+  { key: "contactName",  label: "Contact name",  type: "text",  maxLength: 200, nullable: true },
+  { key: "contactEmail", label: "Contact email", type: "email", maxLength: 254, nullable: true },
+  { key: "contactPhone", label: "Contact phone", type: "tel",   maxLength: 32,  nullable: true },
+];
+
+const toDraft = (company) =>
+  Object.fromEntries(DETAIL_FIELDS.map((f) => [f.key, company[f.key] == null ? "" : String(company[f.key])]));
+
+// Only what differs from the last saved copy, trimmed, with empty nullable
+// fields sent as null. An unchanged form produces an empty object.
+function changedFields(saved, draft) {
+  const out = {};
+  for (const f of DETAIL_FIELDS) {
+    const next = draft[f.key].trim();
+    const prev = saved[f.key] == null ? "" : String(saved[f.key]);
+    if (next === prev) continue;
+    out[f.key] = next === "" && f.nullable ? null : next;
+  }
+  return out;
+}
+
+function FeatureToggle({ feature, enabled, pending, onToggle }) {
+  const id = `feature-${feature.key}`;
+  return h("div", { className: "featureRow" },
+    h("label", { className: "featureLabel", htmlFor: id }, feature.label),
+    h("div", { className: "featureControl" },
+      h("span", { className: "featureState" }, pending ? "Saving…" : enabled ? "On" : "Off"),
+      h("button", {
+        id, type: "button", role: "switch", "aria-checked": enabled,
+        className: `toggle${enabled ? " toggleOn" : ""}`, disabled: pending,
+        onClick: onToggle,
+      }, h("span", { className: "toggleKnob" }))));
+}
+
+function CompanyDetailScreen({ id, onUpdated }) {
+  // undefined while loading; { error } when the load failed.
+  const [loaded,   setLoaded]   = React.useState(undefined);
+  const [draft,    setDraft]    = React.useState(null);
+  const [saving,   setSaving]   = React.useState(false);
+  const [saveMsg,  setSaveMsg]  = React.useState(null);   // { ok, text }
+  const [features, setFeatures] = React.useState({});
+  const [pending,  setPending]  = React.useState({});
+  const [featErr,  setFeatErr]  = React.useState("");
+
+  React.useEffect(() => {
+    let live = true;
+    setLoaded(undefined);
+    setSaveMsg(null);
+    setFeatErr("");
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}`).then((r) => {
+      if (!live) return;
+      if (!r.ok) { setLoaded({ error: r.message }); return; }
+      setLoaded({ company: r.body.company });
+      setDraft(toDraft(r.body.company));
+      setFeatures(Object.fromEntries((r.body.features || []).map((f) => [f.featureKey, f.enabled === true])));
+    });
+    return () => { live = false; };
+  }, [id]);
+
+  const back = h("a", { className: "linkBtn backLink", href: "#/" }, "Back to companies");
+  if (loaded === undefined) return h(React.Fragment, null, back, h("p", { className: "muted" }, "Loading…"));
+  if (loaded.error) {
+    return h(React.Fragment, null, back,
+      h("h1", { className: "pageTitle" }, "Company"),
+      h("div", { className: "loginError", role: "alert" }, loaded.error));
+  }
+
+  const company = loaded.company;
+  const changes = changedFields(company, draft);
+  const dirty = Object.keys(changes).length > 0;
+
+  const edit = (key) => (e) => {
+    setDraft({ ...draft, [key]: e.target.value });
+    setSaveMsg(null);
+  };
+
+  const save = (e) => {
+    e.preventDefault();
+    if (!dirty) return;
+    if ("name" in changes && !changes.name) {
+      setSaveMsg({ ok: false, text: "Enter a company name." });
+      return;
+    }
+    setSaving(true);
+    setSaveMsg(null);
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}`, { method: "PATCH", body: changes })
+      .then((r) => {
+        if (!r.ok) { setSaveMsg({ ok: false, text: r.message }); return; }
+        // The Worker returns the whole row after the update, so what is shown
+        // is what was stored, not what was typed.
+        setLoaded({ company: r.body.company });
+        setDraft(toDraft(r.body.company));
+        setSaveMsg({ ok: true, text: "Saved." });
+        onUpdated(r.body.company);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const toggle = (key) => {
+    const next = !features[key];
+    setPending({ ...pending, [key]: true });
+    setFeatErr("");
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/features/${encodeURIComponent(key)}`,
+      { method: "PUT", body: { enabled: next } })
+      .then((r) => {
+        if (!r.ok) { setFeatErr(r.message); return; }
+        // The switch shows what the Worker stored, not what was requested.
+        setFeatures((f) => ({ ...f, [key]: r.body.feature && r.body.feature.enabled === true }));
+      })
+      .finally(() => setPending((p) => ({ ...p, [key]: false })));
+  };
+
+  const field = (f) => h("div", { key: f.key, className: "detailField" },
+    h("label", { className: "loginLabel", htmlFor: `field-${f.key}` }, f.label),
+    f.type === "select"
+      ? h("select", {
+          id: `field-${f.key}`, className: "loginInput", value: draft[f.key],
+          disabled: saving, onChange: edit(f.key),
+        }, Object.keys(STATUS_LABELS).map((s) => h("option", { key: s, value: s }, STATUS_LABELS[s])))
+      : h("input", {
+          id: `field-${f.key}`, className: "loginInput", type: f.type, maxLength: f.maxLength,
+          value: draft[f.key], disabled: saving, onChange: edit(f.key),
+        }));
+
+  return h(React.Fragment, null,
+    back,
+    h("div", { className: "titleRow" },
+      h("h1", { className: "pageTitle" }, company.name),
+      h(StatusBadge, { status: company.status })),
+
+    h("section", { className: "detailSection" },
+      h("h2", { className: "sectionTitle" }, "Details"),
+      h("form", { onSubmit: save, noValidate: true },
+        h("div", { className: "detailGrid" }, DETAIL_FIELDS.map(field)),
+        h("div", { className: "detailField" },
+          h("span", { className: "loginLabel" }, "Join code"),
+          h("div", { className: "readOnlyValue" }, company.joinCode || h("span", { className: "muted" }, "None"))),
+        h("div", { className: "saveRow" },
+          h("button", { type: "submit", className: "primaryBtn", disabled: saving || !dirty },
+            saving ? "Saving…" : "Save"),
+          !dirty && !saveMsg && h("span", { className: "muted" }, "No changes")),
+        saveMsg && h("div", { className: saveMsg.ok ? "successMsg" : "loginError", role: "status" }, saveMsg.text))),
+
+    h("section", { className: "detailSection" },
+      h("h2", { className: "sectionTitle" }, "Features"),
+      FEATURES.map((f) => h(FeatureToggle, {
+        key: f.key, feature: f, enabled: features[f.key] === true, pending: pending[f.key] === true,
+        onToggle: () => toggle(f.key),
+      })),
+      featErr && h("div", { className: "loginError", role: "alert" }, featErr)));
+}
+
+function SignedInShell({ companies, onCreated, onUpdated, onSignOut }) {
   const route = useHashRoute();
   const signOut = () => {
     // So the next sign-in starts on the list, not on whichever company was open.
@@ -306,7 +489,7 @@ function SignedInShell({ companies, onCreated, onSignOut }) {
       h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out")),
     h("main", { className: "pageBody" },
       route.name === "company"
-        ? h(CompanyDetailPlaceholder, { company: companies.find((c) => c.id === route.id) })
+        ? h(CompanyDetailScreen, { id: route.id, onUpdated })
         : h(CompanyListScreen, { companies, onCreated })));
 }
 
@@ -340,6 +523,8 @@ function App() {
     companies,
     // Appended, since the Worker lists in creation order.
     onCreated: (company) => setCompanies((list) => [...list, company]),
+    // So the list is current on the way back from an edit, without a refetch.
+    onUpdated: (company) => setCompanies((list) => list.map((c) => (c.id === company.id ? company : c))),
     onSignOut: signOut,
   });
 }
@@ -413,6 +598,35 @@ const css = `
 .badge-active{background:rgba(107,203,119,0.18);border-color:var(--green)}
 .badge-suspended{background:rgba(244,132,95,0.16);border-color:var(--terracotta)}
 .badge-unknown{background:rgba(0,0,0,0.05);border-color:var(--border)}
+
+.titleRow .badge{margin-right:auto}
+.detailSection{padding:24px 0;border-top:1px solid var(--border)}
+.detailSection:first-of-type{border-top:0;padding-top:8px}
+.sectionTitle{font-size:0.8rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;
+  color:var(--muted);margin:0 0 16px}
+.detailGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));column-gap:20px}
+.detailField{display:flex;flex-direction:column}
+select.loginInput{appearance:auto}
+.loginInput:disabled{opacity:0.6}
+.readOnlyValue{font-weight:600;letter-spacing:0.12em;padding:10px 0;margin-bottom:16px}
+.saveRow{display:flex;align-items:center;gap:12px}
+.successMsg{margin-top:16px;padding:10px 12px;font-size:0.9rem;font-weight:500;
+  background:rgba(107,203,119,0.16);border-left:3px solid var(--green);border-radius:6px}
+
+.featureRow{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:14px 0;border-bottom:1px solid var(--border)}
+.featureRow:first-of-type{border-top:1px solid var(--border)}
+.featureLabel{font-weight:500}
+.featureControl{display:flex;align-items:center;gap:10px}
+.featureState{font-size:0.85rem;color:var(--muted);min-width:3.5em;text-align:right}
+.toggle{position:relative;width:44px;height:24px;border-radius:999px;border:1px solid rgba(0,0,0,0.25);
+  background:rgba(0,0,0,0.08);cursor:pointer;padding:0;transition:background .15s,border-color .15s}
+.toggleOn{background:var(--green);border-color:var(--green)}
+.toggleKnob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.3);transition:transform .15s}
+.toggleOn .toggleKnob{transform:translateX(20px)}
+.toggle:focus-visible{outline:2px solid var(--periwinkle);outline-offset:2px}
+.toggle:disabled{opacity:0.6;cursor:default}
 `;
 const style = document.createElement("style");
 style.textContent = css;
