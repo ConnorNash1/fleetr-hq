@@ -1,0 +1,5 @@
+.env
+
+# macOS Finder metadata. Written into any folder the Finder opens, so it turns
+# up without anyone adding it on purpose.
+.DS_Store
