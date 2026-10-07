@@ -323,6 +323,7 @@ const FEATURES = [
   { key: "no_shows",            label: "No-shows" },
   { key: "reports",             label: "Reports" },
   { key: "audit_log",           label: "Audit log" },
+  { key: "fleet_notifications", label: "Notification centre" },
 ];
 
 // The editable fields, in display order. `nullable` fields are cleared by
