@@ -333,7 +333,6 @@ async function adminRequest(path, { method = "GET", body } = {}) {
 const FEATURES = [
   { key: "ai_command_bar",      label: "AI command bar" },
   { key: "insurance_rentals",   label: "Insurance rentals" },
-  { key: "damage_claims",       label: "Damage claims" },
   { key: "non_drive_intake",    label: "Non-drive intake" },
   { key: "pre_rental_check",    label: "Pre-rental check" },
   { key: "unknown_repair_date", label: "Unknown repair date" },
