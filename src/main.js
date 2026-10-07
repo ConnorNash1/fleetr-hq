@@ -202,10 +202,27 @@ async function createCompany(name) {
 // Two routes, so a hash listener rather than react-router. Hash-based for the
 // same reason internal uses HashRouter: GitHub Pages serves one file and would
 // 404 on any real path.
+// Set by a screen holding unsaved changes: returns the warning to show before
+// leaving it, or null when there is nothing to lose.
+let leaveGuard = null;
+const confirmLeave = () => {
+  const msg = leaveGuard && leaveGuard();
+  return !msg || window.confirm(msg);
+};
+
 function useHashRoute() {
   const [hash, setHash] = React.useState(window.location.hash);
   React.useEffect(() => {
-    const onChange = () => setHash(window.location.hash);
+    let current = window.location.hash;
+    const onChange = () => {
+      // Cancelled: put the address back without firing another hashchange.
+      if (!confirmLeave()) {
+        history.replaceState(null, "", current || window.location.pathname + window.location.search);
+        return;
+      }
+      current = window.location.hash;
+      setHash(current);
+    };
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
@@ -353,12 +370,12 @@ function changedFields(saved, draft) {
   return out;
 }
 
-function FeatureToggle({ feature, enabled, pending, onToggle }) {
+function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
   const id = `feature-${feature.key}`;
   return h("div", { className: "featureRow" },
     h("label", { className: "featureLabel", htmlFor: id }, feature.label),
     h("div", { className: "featureControl" },
-      h("span", { className: "featureState" }, pending ? "Saving…" : enabled ? "On" : "Off"),
+      h("span", { className: "featureState" }, `${enabled ? "On" : "Off"}${changed ? " (unsaved)" : ""}`),
       h("button", {
         id, type: "button", role: "switch", "aria-checked": enabled,
         className: `toggle${enabled ? " toggleOn" : ""}`, disabled: pending,
@@ -373,14 +390,31 @@ function CompanyDetailScreen({ id, onUpdated }) {
   const [saving,   setSaving]   = React.useState(false);
   const [saveMsg,  setSaveMsg]  = React.useState(null);   // { ok, text }
   const [features, setFeatures] = React.useState({});
-  const [pending,  setPending]  = React.useState({});
+  // Flipped but not saved yet: featureKey -> the value it will be saved as.
+  const [featDraft, setFeatDraft] = React.useState({});
+  const [featSaving, setFeatSaving] = React.useState(false);
   const [featErr,  setFeatErr]  = React.useState("");
+  const [featMsg,  setFeatMsg]  = React.useState("");
+  const unsaved = Object.keys(featDraft).length;
+
+  // Warn before leaving with unsaved feature changes: closing or reloading
+  // the tab, and moving to another screen in this app.
+  React.useEffect(() => {
+    if (!unsaved) return undefined;
+    const msg = `You have ${unsaved} unsaved feature ${unsaved === 1 ? "change" : "changes"}. Leave without saving?`;
+    leaveGuard = () => msg;
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = msg; return msg; };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => { leaveGuard = null; window.removeEventListener("beforeunload", onBeforeUnload); };
+  }, [unsaved]);
 
   React.useEffect(() => {
     let live = true;
     setLoaded(undefined);
     setSaveMsg(null);
     setFeatErr("");
+    setFeatMsg("");
+    setFeatDraft({});
     adminRequest(`/admin/companies/${encodeURIComponent(id)}`).then((r) => {
       if (!live) return;
       if (!r.ok) { setLoaded({ error: r.message }); return; }
@@ -430,18 +464,53 @@ function CompanyDetailScreen({ id, onUpdated }) {
       .finally(() => setSaving(false));
   };
 
+  // Flipping only changes the draft. Flipping back to the saved value drops
+  // it from the draft, so it no longer counts as a change.
+  const shownFeature = (key) => (key in featDraft ? featDraft[key] : features[key] === true);
   const toggle = (key) => {
-    const next = !features[key];
-    setPending({ ...pending, [key]: true });
+    const next = !shownFeature(key);
+    setFeatDraft((d) => {
+      const out = { ...d };
+      if (next === (features[key] === true)) delete out[key]; else out[key] = next;
+      return out;
+    });
     setFeatErr("");
-    adminRequest(`/admin/companies/${encodeURIComponent(id)}/features/${encodeURIComponent(key)}`,
-      { method: "PUT", body: { enabled: next } })
-      .then((r) => {
-        if (!r.ok) { setFeatErr(r.message); return; }
-        // The switch shows what the Worker stored, not what was requested.
-        setFeatures((f) => ({ ...f, [key]: r.body.feature && r.body.feature.enabled === true }));
+    setFeatMsg("");
+  };
+
+  // Saves every flipped toggle. Each is its own request; the ones that fail
+  // stay in the draft, flipped, so nothing is silently lost.
+  const saveFeatures = () => {
+    const keys = Object.keys(featDraft);
+    if (!keys.length) return;
+    setFeatSaving(true);
+    setFeatErr("");
+    setFeatMsg("");
+    Promise.all(keys.map((key) =>
+      adminRequest(`/admin/companies/${encodeURIComponent(id)}/features/${encodeURIComponent(key)}`,
+        { method: "PUT", body: { enabled: featDraft[key] } }).then((r) => ({ key, r }))))
+      .then((results) => {
+        const saved = results.filter((x) => x.r.ok);
+        const failed = results.filter((x) => !x.r.ok);
+        // The switches show what the Worker stored, not what was requested.
+        setFeatures((f) => {
+          const out = { ...f };
+          saved.forEach(({ key, r }) => { out[key] = !!(r.body.feature && r.body.feature.enabled === true); });
+          return out;
+        });
+        setFeatDraft((d) => {
+          const out = { ...d };
+          saved.forEach(({ key }) => { delete out[key]; });
+          return out;
+        });
+        if (failed.length) {
+          const names = failed.map(({ key }) => (FEATURES.find((f) => f.key === key) || { label: key }).label);
+          setFeatErr(`Not saved: ${names.join(", ")}. ${failed[0].r.message}`);
+        } else {
+          setFeatMsg(`Saved ${saved.length} ${saved.length === 1 ? "change" : "changes"}.`);
+        }
       })
-      .finally(() => setPending((p) => ({ ...p, [key]: false })));
+      .finally(() => setFeatSaving(false));
   };
 
   const field = (f) => h("div", { key: f.key, className: "detailField" },
@@ -478,15 +547,27 @@ function CompanyDetailScreen({ id, onUpdated }) {
     h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
       FEATURES.map((f) => h(FeatureToggle, {
-        key: f.key, feature: f, enabled: features[f.key] === true, pending: pending[f.key] === true,
-        onToggle: () => toggle(f.key),
+        key: f.key, feature: f, enabled: shownFeature(f.key), changed: f.key in featDraft,
+        pending: featSaving, onToggle: () => toggle(f.key),
       })),
+      h("div", { className: "saveRow", style: { marginTop: "16px" } },
+        h("button", { type: "button", className: "primaryBtn", disabled: featSaving || !unsaved, onClick: saveFeatures },
+          featSaving ? "Saving…" : "Save changes"),
+        h("span", { className: "muted", role: "status" },
+          unsaved ? `${unsaved} unsaved ${unsaved === 1 ? "change" : "changes"}` : "No changes"),
+        unsaved > 0 && h("button", {
+          type: "button", className: "linkBtn", disabled: featSaving,
+          onClick: () => { setFeatDraft({}); setFeatErr(""); setFeatMsg(""); },
+        }, "Discard")),
+      featMsg && h("div", { className: "successMsg", role: "status" }, featMsg),
       featErr && h("div", { className: "loginError", role: "alert" }, featErr)));
 }
 
 function SignedInShell({ companies, onCreated, onUpdated, onSignOut }) {
   const route = useHashRoute();
   const signOut = () => {
+    if (!confirmLeave()) return;
+    leaveGuard = null;
     // So the next sign-in starts on the list, not on whichever company was open.
     if (window.location.hash) window.location.hash = "";
     onSignOut();
