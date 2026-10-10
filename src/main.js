@@ -486,6 +486,134 @@ function SetupProgress({ id }) {
     body());
 }
 
+// A company made here has no branch, so its join code works for nobody until
+// HQ opens the first one. After that its Exec opens any more from fleetr.
+function FirstBranchForm({ id, onOpened }) {
+  const [name, setName] = React.useState("");
+  const [code, setCode] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [err,  setErr]  = React.useState("");
+
+  const submit = (e) => {
+    e.preventDefault();
+    const nm = name.trim(), cd = code.trim().toUpperCase();
+    if (!nm) { setErr("Enter a branch name."); return; }
+    if (!/^[A-Z0-9]{2,8}$/.test(cd)) { setErr("The branch code must be 2 to 8 letters and digits."); return; }
+    if (!window.confirm(`Open ${nm} (${cd}) as this company's first branch? People who sign up with the join code will join it.`)) return;
+    setBusy(true);
+    setErr("");
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/branch`, { method: "POST", body: { name: nm, code: cd } })
+      .then((r) => { if (r.ok) onOpened(); else setErr(r.message); })
+      .finally(() => setBusy(false));
+  };
+
+  return h("form", { className: "newCompany", onSubmit: submit, noValidate: true },
+    h("p", { style: { marginTop: 0 } },
+      "This company has no branch yet, so nobody can sign up with its join code. Open its first branch here. Its Exec sets the rest of it up in fleetr."),
+    h("div", { className: "detailGrid" },
+      h("div", { className: "detailField" },
+        h("label", { className: "loginLabel", htmlFor: "branch-name" }, "Branch name"),
+        h("input", { id: "branch-name", className: "loginInput", maxLength: 60, value: name, disabled: busy,
+          onChange: (e) => { setName(e.target.value); setErr(""); } })),
+      h("div", { className: "detailField" },
+        h("label", { className: "loginLabel", htmlFor: "branch-code" }, "Branch code"),
+        h("input", { id: "branch-code", className: "loginInput", maxLength: 8, value: code, disabled: busy,
+          placeholder: "2 to 8 letters and digits",
+          onChange: (e) => { setCode(e.target.value.toUpperCase()); setErr(""); } }))),
+    h("div", { className: "saveRow" },
+      h("button", { type: "submit", className: "primaryBtn", disabled: busy }, busy ? "Opening…" : "Open first branch")),
+    err && h("div", { className: "loginError", role: "alert" }, err));
+}
+
+const signedUpOn = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
+
+// Read only, apart from approving or declining a pending sign-up. HQ approves
+// only the company's first Exec; once it has one, the Exec approves the rest.
+function CompanyStaff({ id, company, onChanged }) {
+  const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { staff, branches }
+  const [busyId, setBusyId] = React.useState(null);
+  const [actErr, setActErr] = React.useState("");
+  const [actMsg, setActMsg] = React.useState("");
+  const [reload, setReload] = React.useState(0);
+
+  React.useEffect(() => {
+    let live = true;
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/staff`).then((r) => {
+      if (!live) return;
+      setState(r.ok ? { staff: r.body.staff, branches: r.body.branches } : { error: r.message });
+    });
+    return () => { live = false; };
+  }, [id, reload]);
+
+  const refresh = () => { setReload((n) => n + 1); onChanged(); };
+
+  const act = (person, approve) => {
+    const who = `${person.name} (${person.username})`;
+    const contact = [company.contactName, company.contactEmail].filter(Boolean).join(", ");
+    const msg = approve
+      ? `Approve ${who} as ${company.name}'s Exec? They will be able to run the whole company in fleetr and approve its staff.`
+        + (contact ? ` The company contact on record is ${contact}.` : " This company has no contact on record to check them against.")
+      : `Decline ${who}? Their account is removed and they cannot sign in.`;
+    if (!window.confirm(msg)) return;
+    setBusyId(person.id);
+    setActErr("");
+    setActMsg("");
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/signups/${encodeURIComponent(person.id)}`,
+      { method: approve ? "POST" : "DELETE" })
+      .then((r) => {
+        if (!r.ok) { setActErr(r.message); return; }
+        setActMsg(approve ? `${person.name} is now the Exec.`
+          : r.body.removed ? `${person.name}'s sign-up was declined.`
+          : `${person.name}'s sign-up was declined. Their account is kept, deactivated, because records point at it.`);
+        refresh();
+      })
+      .finally(() => setBusyId(null));
+  };
+
+  const body = () => {
+    if (state === undefined) return h("p", { className: "muted" }, "Loading…");
+    if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
+    const { staff, branches } = state;
+    const branchName = (s) => (s.role === "Exec" ? "All branches"
+      : (branches.find((b) => b.id === s.locationId) || { name: "" }).name);
+    const hasExec = staff.some((s) => s.role === "Exec" && s.active);
+    return h(React.Fragment, null,
+      branches.length === 0 && h(FirstBranchForm, { id, onOpened: refresh }),
+      staff.length === 0
+        ? h("p", { className: "muted" }, branches.length === 0 ? "No staff yet." : "No staff yet. The first person to sign up with the join code appears here.")
+        : h("div", { className: "tableWrap" },
+            h("table", { className: "companyTable" },
+              h("thead", null,
+                h("tr", null,
+                  ["Name", "Email", "Role", "Branch", "Status", "Signed up", ""].map((c, i) =>
+                    h("th", { key: i, scope: "col" }, c)))),
+              h("tbody", null,
+                staff.map((s) => {
+                  const pending = !!s.pendingApprovalSince;
+                  return h("tr", { key: s.id },
+                    h("td", null, s.name, h("div", { className: "muted" }, s.username)),
+                    h("td", null, s.recoveryEmail || h("span", { className: "muted" }, "None")),
+                    h("td", null, s.role),
+                    h("td", null, branchName(s)),
+                    h("td", null, pending ? "Pending" : s.active ? "Approved" : "Approved, deactivated"),
+                    h("td", null, signedUpOn(s.createdAt)),
+                    h("td", null, pending && h("div", { className: "staffActions" },
+                      !hasExec && h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
+                        onClick: () => act(s, true) }, busyId === s.id ? "Working…" : "Approve as Exec"),
+                      h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
+                        onClick: () => act(s, false) }, "Decline"))));
+                })))),
+      hasExec && staff.some((s) => s.pendingApprovalSince) && h("p", { className: "muted" },
+        "This company has an Exec, who approves pending staff from fleetr. HQ can still decline a sign-up here."),
+      actMsg && h("div", { className: "successMsg", role: "status" }, actMsg),
+      actErr && h("div", { className: "loginError", role: "alert" }, actErr));
+  };
+
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "Staff"),
+    body());
+}
+
 function CompanyDetailScreen({ id, onUpdated }) {
   // undefined while loading; { error } when the load failed.
   const [loaded,   setLoaded]   = React.useState(undefined);
@@ -498,6 +626,8 @@ function CompanyDetailScreen({ id, onUpdated }) {
   const [featSaving, setFeatSaving] = React.useState(false);
   const [featErr,  setFeatErr]  = React.useState("");
   const [featMsg,  setFeatMsg]  = React.useState("");
+  // Bumped when a staff or branch change could move the setup checklist.
+  const [setupKey, setSetupKey] = React.useState(0);
   const unsaved = Object.keys(featDraft).length;
 
   // Warn before leaving with unsaved feature changes: closing or reloading
@@ -647,7 +777,9 @@ function CompanyDetailScreen({ id, onUpdated }) {
           !dirty && !saveMsg && h("span", { className: "muted" }, "No changes")),
         saveMsg && h("div", { className: saveMsg.ok ? "successMsg" : "loginError", role: "status" }, saveMsg.text))),
 
-    h(SetupProgress, { id }),
+    h(SetupProgress, { key: setupKey, id }),
+
+    h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1) }),
 
     h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
@@ -735,6 +867,7 @@ const css = `
 .setupItem{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--border)}
 .setupDone,.setupLeft{flex:0 0 44px;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
 .setupLeft{color:var(--muted)}
+.staffActions{display:flex;gap:14px;flex-wrap:wrap;white-space:nowrap}
 
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
 .loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;
