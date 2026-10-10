@@ -238,6 +238,14 @@ function StatusBadge({ status }) {
     STATUS_LABELS[status] || status || "Unknown");
 }
 
+// Where a company is in its own setup: before launch, paused by its Exec, or
+// live. Suspension is the status above, set here.
+function setupStateLabel(c) {
+  if (!c.launchedAt) return "In setup";
+  if (c.pausedAt) return "Paused";
+  return "Live";
+}
+
 function NewCompanyForm({ onCreated, onCancel }) {
   const [name,   setName]   = React.useState("");
   const [error,  setError]  = React.useState("");
@@ -292,12 +300,14 @@ function CompanyListScreen({ companies, onCreated }) {
               h("tr", null,
                 h("th", { scope: "col" }, "Name"),
                 h("th", { scope: "col" }, "Status"),
+                h("th", { scope: "col" }, "Setup"),
                 h("th", { scope: "col" }, "Plan"))),
             h("tbody", null,
               companies.map((c) => h("tr", { key: c.id },
                 h("td", null,
                   h("a", { className: "companyLink", href: `#/company/${encodeURIComponent(c.id)}` }, c.name)),
                 h("td", null, h(StatusBadge, { status: c.status })),
+                h("td", null, setupStateLabel(c)),
                 h("td", null, c.planTier || h("span", { className: "muted" }, "Not set"))))))));
 }
 
@@ -380,6 +390,100 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
         className: `toggle${enabled ? " toggleOn" : ""}`, disabled: pending,
         onClick: onToggle,
       }, h("span", { className: "toggleKnob" }))));
+}
+
+// The checklist items company_setup_status returns, in its order, as the
+// company's Exec sees them in fleetr. detail is what is still missing.
+const SETUP_ITEMS = {
+  units:                 "Fuel and distance units",
+  branches:              "Each branch's time zone and sales tax",
+  pickup_locations:      "Pickup locations for every open branch",
+  vehicle_classes:       "Vehicle classes",
+  sources:               "Sources",
+  daily_rates:           "A daily rate for every vehicle class",
+  acknowledgements:      "Contract acknowledgements",
+  vehicles:              "A vehicle at the default branch",
+  confirmation_text:     "Reservation confirmation text",
+  listing:               "Complete fleetr.ai listing for every listed branch",
+  test_rentals_finished: "Test rentals finished",
+  other_texts:           "Other customer texts",
+  protection_products:   "Protection products",
+  other_driver_price:    "Other driver price",
+  deductibles:           "Deductibles",
+  gas:                   "Fuel pricing for every branch",
+  staff:                 "Staff besides the Exec",
+  test_rental:           "A test rental, start to finish",
+};
+// Why an item that is not done is not done, from its detail.
+function setupReason(item) {
+  const list = Array.isArray(item.detail) ? item.detail : [];
+  switch (item.key) {
+    case "units":             return "Not chosen yet.";
+    case "branches":          return list.length ? `Missing a time zone or sales tax: ${list.join(", ")}.` : "No open branch.";
+    case "pickup_locations":  return list.length ? `None at: ${list.join(", ")}.` : "No open branch.";
+    case "vehicle_classes":   return "None added.";
+    case "sources":           return "None added.";
+    case "daily_rates":       return list.length ? `No rate for: ${list.join(", ")}.` : "No vehicle classes yet.";
+    case "acknowledgements":  return "Not written.";
+    case "vehicles":          return "No vehicle with one of the company's classes at its default branch.";
+    case "confirmation_text": return "Not written, so it is not sent.";
+    case "listing":           return list.length ? `Incomplete: ${list.join(", ")}.` : "No branch is listed.";
+    case "test_rentals_finished": return `Still open: ${list.join(", ")}.`;
+    case "other_texts":       return `Not written, so not sent: ${list.join(", ")}.`;
+    case "protection_products": return list.length ? `Missing a price or decline wording: ${list.join(", ")}.` : "None added.";
+    case "other_driver_price": return "None set, so no other driver can be added.";
+    case "deductibles":       return "None set.";
+    case "gas":               return list.length ? `No markup or prices at: ${list.join(", ")}.` : "No open branch.";
+    case "staff":             return "Only the Exec so far.";
+    case "test_rental":       return "None closed yet.";
+    default:                  return "";
+  }
+}
+
+function SetupItem({ item }) {
+  return h("li", { className: "setupItem" },
+    h("span", { className: item.done ? "setupDone" : "setupLeft" }, item.done ? "Done" : "Left"),
+    h("span", null, SETUP_ITEMS[item.key] || item.key),
+    !item.done && h("span", { className: "muted" }, ` ${setupReason(item)}`));
+}
+
+// Read only. HQ sees the company's progress; only its Exec can launch,
+// pause or resume it, from fleetr.
+function SetupProgress({ id }) {
+  const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { setup }
+  React.useEffect(() => {
+    let live = true;
+    setState(undefined);
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/setup`).then((r) => {
+      if (!live) return;
+      setState(r.ok ? { setup: r.body.setup } : { error: r.message });
+    });
+    return () => { live = false; };
+  }, [id]);
+
+  const body = () => {
+    if (state === undefined) return h("p", { className: "muted" }, "Loading…");
+    if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
+    const s = state.setup;
+    const required = s.items.filter((i) => i.required);
+    const optional = s.items.filter((i) => !i.required);
+    const left = required.filter((i) => !i.done).length;
+    const where = !s.launched
+      ? `In setup. ${left === 0 ? "Every required item is done; waiting for the Exec to launch." : `${left} of ${required.length} required items left.`}`
+      : s.suspended ? "Launched, and suspended here: hidden from fleetr.ai with no online bookings until the status is changed back. Texts for existing bookings still go."
+      : s.paused ? "Launched, and paused by its Exec: hidden from fleetr.ai with no online bookings. Texts for existing bookings still go."
+      : "Launched and live.";
+    return h(React.Fragment, null,
+      h("p", null, where),
+      h("h3", { className: "setupHeading" }, "Required before launch"),
+      h("ul", { className: "setupList" }, required.map((i) => h(SetupItem, { key: i.key, item: i }))),
+      h("h3", { className: "setupHeading" }, "Optional"),
+      h("ul", { className: "setupList" }, optional.map((i) => h(SetupItem, { key: i.key, item: i }))));
+  };
+
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "Setup"),
+    body());
 }
 
 function CompanyDetailScreen({ id, onUpdated }) {
@@ -543,6 +647,8 @@ function CompanyDetailScreen({ id, onUpdated }) {
           !dirty && !saveMsg && h("span", { className: "muted" }, "No changes")),
         saveMsg && h("div", { className: saveMsg.ok ? "successMsg" : "loginError", role: "status" }, saveMsg.text))),
 
+    h(SetupProgress, { id }),
+
     h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
       FEATURES.map((f) => h(FeatureToggle, {
@@ -624,6 +730,11 @@ const css = `
 .wordmark{font-size:1.75rem;font-weight:700;letter-spacing:-0.02em}
 .wordmarkHq{font-weight:500;color:var(--muted);margin-left:6px}
 .muted{color:var(--muted)}
+.setupHeading{font-size:0.95rem;margin:16px 0 6px}
+.setupList{list-style:none;margin:0;padding:0}
+.setupItem{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--border)}
+.setupDone,.setupLeft{flex:0 0 44px;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
+.setupLeft{color:var(--muted)}
 
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
 .loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;
