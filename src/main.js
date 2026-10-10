@@ -396,7 +396,7 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
 // company's Exec sees them in fleetr. detail is what is still missing.
 const SETUP_ITEMS = {
   units:                 "Fuel and distance units",
-  branches:              "Each branch's time zone and sales tax",
+  branches:              "Each branch's sales tax",
   branch_addresses:      "A full address for every branch",
   pickup_locations:      "Pickup locations for every open branch",
   vehicle_classes:       "Vehicle classes",
@@ -420,8 +420,8 @@ function setupReason(item) {
   const list = Array.isArray(item.detail) ? item.detail : [];
   switch (item.key) {
     case "units":             return "Not chosen yet.";
-    case "branches":          return list.length ? `Missing a time zone or sales tax: ${list.join(", ")}.` : "No open branch.";
-    case "branch_addresses":  return list.length ? `No full address: ${list.join(", ")}.` : "No open branch.";
+    case "branches":          return list.length ? `No sales tax saved: ${list.join(", ")}.` : "No open branch.";
+    case "branch_addresses":  return list.length ? `No full address with a map pin: ${list.join(", ")}.` : "No open branch.";
     case "pickup_locations":  return list.length ? `None at: ${list.join(", ")}.` : "No open branch.";
     case "vehicle_classes":   return "None added.";
     case "sources":           return "None added.";
