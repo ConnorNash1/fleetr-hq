@@ -397,6 +397,7 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
 const SETUP_ITEMS = {
   units:                 "Fuel and distance units",
   branches:              "Each branch's time zone and sales tax",
+  branch_addresses:      "A full address for every branch",
   pickup_locations:      "Pickup locations for every open branch",
   vehicle_classes:       "Vehicle classes",
   sources:               "Sources",
@@ -420,6 +421,7 @@ function setupReason(item) {
   switch (item.key) {
     case "units":             return "Not chosen yet.";
     case "branches":          return list.length ? `Missing a time zone or sales tax: ${list.join(", ")}.` : "No open branch.";
+    case "branch_addresses":  return list.length ? `No full address: ${list.join(", ")}.` : "No open branch.";
     case "pickup_locations":  return list.length ? `None at: ${list.join(", ")}.` : "No open branch.";
     case "vehicle_classes":   return "None added.";
     case "sources":           return "None added.";
@@ -490,19 +492,17 @@ function SetupProgress({ id }) {
 // HQ opens the first one. After that its Exec opens any more from fleetr.
 function FirstBranchForm({ id, onOpened }) {
   const [name, setName] = React.useState("");
-  const [code, setCode] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [err,  setErr]  = React.useState("");
 
   const submit = (e) => {
     e.preventDefault();
-    const nm = name.trim(), cd = code.trim().toUpperCase();
+    const nm = name.trim();
     if (!nm) { setErr("Enter a branch name."); return; }
-    if (!/^[A-Z0-9]{2,8}$/.test(cd)) { setErr("The branch code must be 2 to 8 letters and digits."); return; }
-    if (!window.confirm(`Open ${nm} (${cd}) as this company's first branch? People who sign up with the join code will join it.`)) return;
+    if (!window.confirm(`Open ${nm} as this company's first branch? People who sign up with the join code will join it.`)) return;
     setBusy(true);
     setErr("");
-    adminRequest(`/admin/companies/${encodeURIComponent(id)}/branch`, { method: "POST", body: { name: nm, code: cd } })
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/branch`, { method: "POST", body: { name: nm } })
       .then((r) => { if (r.ok) onOpened(); else setErr(r.message); })
       .finally(() => setBusy(false));
   };
@@ -514,12 +514,7 @@ function FirstBranchForm({ id, onOpened }) {
       h("div", { className: "detailField" },
         h("label", { className: "loginLabel", htmlFor: "branch-name" }, "Branch name"),
         h("input", { id: "branch-name", className: "loginInput", maxLength: 60, value: name, disabled: busy,
-          onChange: (e) => { setName(e.target.value); setErr(""); } })),
-      h("div", { className: "detailField" },
-        h("label", { className: "loginLabel", htmlFor: "branch-code" }, "Branch code"),
-        h("input", { id: "branch-code", className: "loginInput", maxLength: 8, value: code, disabled: busy,
-          placeholder: "2 to 8 letters and digits",
-          onChange: (e) => { setCode(e.target.value.toUpperCase()); setErr(""); } }))),
+          onChange: (e) => { setName(e.target.value); setErr(""); } }))),
     h("div", { className: "saveRow" },
       h("button", { type: "submit", className: "primaryBtn", disabled: busy }, busy ? "Opening…" : "Open first branch")),
     err && h("div", { className: "loginError", role: "alert" }, err));
