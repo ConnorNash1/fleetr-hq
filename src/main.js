@@ -409,7 +409,6 @@ const SETUP_ITEMS = {
   test_rentals_finished: "Test rentals finished",
   other_texts:           "Other customer texts",
   protection_products:   "Protection products",
-  other_driver_price:    "Other driver price",
   deductibles:           "Deductibles",
   gas:                   "Fuel pricing for every branch",
   staff:                 "Staff besides the Exec",
@@ -433,7 +432,6 @@ function setupReason(item) {
     case "test_rentals_finished": return `Still open: ${list.join(", ")}.`;
     case "other_texts":       return `Not written, so not sent: ${list.join(", ")}.`;
     case "protection_products": return list.length ? `Missing a price or decline wording: ${list.join(", ")}.` : "None added.";
-    case "other_driver_price": return "None set, so no other driver can be added.";
     case "deductibles":       return "None set.";
     case "gas":               return list.length ? `No markup or prices at: ${list.join(", ")}.` : "No open branch.";
     case "staff":             return "Only the Exec so far.";
