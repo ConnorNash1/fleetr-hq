@@ -607,7 +607,97 @@ function CompanyStaff({ id, company, onChanged }) {
     body());
 }
 
-function CompanyDetailScreen({ id, onUpdated }) {
+// ─── Deleting a company ───────────────────────────────────────────────────────
+// What the confirm box counts, in words. Everything else is "other records".
+const DELETE_COUNT_WORDS = [
+  ["users",             "staff member and their sign-in", "staff members and their sign-ins"],
+  ["locations",         "branch", "branches"],
+  ["reservations",      "reservation", "reservations"],
+  ["rental_agreements", "rental agreement", "rental agreements"],
+  ["fleet",             "vehicle", "vehicles"],
+  ["damage_claims",     "damage claim", "damage claims"],
+];
+const countWords = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+function deletionLines(counts, files) {
+  const c = counts || {};
+  const lines = DELETE_COUNT_WORDS.filter(([k]) => c[k] > 0).map(([k, one, many]) => countWords(c[k], one, many));
+  const named = new Set(DELETE_COUNT_WORDS.map(([k]) => k));
+  const other = Object.entries(c).filter(([k]) => !named.has(k)).reduce((sum, [, n]) => sum + n, 0);
+  if (other > 0) lines.push(countWords(other, "other record", "other records"));
+  if (files > 0) lines.push(countWords(files, "photo or logo file", "photo and logo files"));
+  return lines;
+}
+
+// Only a company in setup mode (never launched) or suspended can be deleted.
+// The database refuses any other; this box only says so first.
+const DELETE_BLOCKED = {
+  live: "This company is live. A company can be deleted only in setup mode or once it is suspended. Set its status to Suspended under Details first.",
+  platform_admin: "One of this company's staff is a platform admin. Remove them from platform admins first.",
+};
+
+function DeleteCompany({ id, company, onDeleted }) {
+  const [open,    setOpen]    = React.useState(false);
+  const [preview, setPreview] = React.useState(undefined);   // undefined loading, { error } or the preview
+  const [typed,   setTyped]   = React.useState("");
+  const [busy,    setBusy]    = React.useState(false);
+  const [err,     setErr]     = React.useState("");
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    let live = true;
+    setPreview(undefined);
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/deletion`).then((r) => {
+      if (live) setPreview(r.ok ? r.body : { error: r.message });
+    });
+    return () => { live = false; };
+  }, [open, id, company.status]);
+
+  const close = () => { setOpen(false); setTyped(""); setErr(""); };
+  const blocked = preview && !preview.error && preview.blocked;
+  const ready = preview && !preview.error && !blocked && typed.trim() === company.name && !busy;
+
+  const remove = () => {
+    if (!ready) return;
+    setBusy(true);
+    setErr("");
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}`, { method: "DELETE", body: { name: typed } })
+      .then((r) => {
+        if (!r.ok) { setErr(r.message); return; }
+        if (r.body.filesLeft) {
+          window.alert(`${company.name} was deleted, but ${r.body.filesLeft} files could not be removed. Delete it again from the same address to remove them.`);
+        }
+        onDeleted(id);
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "Danger zone"),
+    !open
+      ? h("div", { className: "saveRow" },
+          h("button", { type: "button", className: "dangerBtn", onClick: () => setOpen(true) }, "Delete company"),
+          h("span", { className: "muted" }, "Deletes the company and everything tied to it. This cannot be undone."))
+      : h("div", { className: "deleteBox" },
+          h("p", { className: "deleteTitle" }, `Delete ${company.name}?`),
+          preview === undefined && h("p", { className: "muted" }, "Checking what would be deleted…"),
+          preview && preview.error && h("div", { className: "loginError", role: "alert" }, preview.error),
+          preview && !preview.error && h(React.Fragment, null,
+            h("p", null, "This deletes the company and everything tied to it, for good:"),
+            h("ul", { className: "deleteList" },
+              deletionLines(preview.counts, preview.files).map((line) => h("li", { key: line }, line)),
+              h("li", null, "its settings, rates, texts, contract wording and audit log")),
+            blocked && h("div", { className: "loginError", role: "alert" }, DELETE_BLOCKED[blocked] || "This company cannot be deleted right now.")),
+          h("label", { className: "loginLabel", htmlFor: "delete-name" }, `Type ${company.name} to confirm`),
+          h("input", { id: "delete-name", className: "loginInput", type: "text", autoComplete: "off", value: typed,
+            disabled: busy || !!blocked, onChange: (e) => { setTyped(e.target.value); setErr(""); } }),
+          h("div", { className: "saveRow" },
+            h("button", { type: "button", className: "dangerBtn", disabled: !ready, onClick: remove },
+              busy ? "Deleting…" : "Delete company"),
+            h("button", { type: "button", className: "linkBtn", disabled: busy, onClick: close }, "Cancel")),
+          err && h("div", { className: "loginError", role: "alert" }, err)));
+}
+
+function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
   // undefined while loading; { error } when the load failed.
   const [loaded,   setLoaded]   = React.useState(undefined);
   const [draft,    setDraft]    = React.useState(null);
@@ -790,10 +880,12 @@ function CompanyDetailScreen({ id, onUpdated }) {
           onClick: () => { setFeatDraft({}); setFeatErr(""); setFeatMsg(""); },
         }, "Discard")),
       featMsg && h("div", { className: "successMsg", role: "status" }, featMsg),
-      featErr && h("div", { className: "loginError", role: "alert" }, featErr)));
+      featErr && h("div", { className: "loginError", role: "alert" }, featErr)),
+
+    h(DeleteCompany, { id, company, onDeleted }));
 }
 
-function SignedInShell({ companies, onCreated, onUpdated, onSignOut }) {
+function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }) {
   const route = useHashRoute();
   const signOut = () => {
     if (!confirmLeave()) return;
@@ -808,7 +900,12 @@ function SignedInShell({ companies, onCreated, onUpdated, onSignOut }) {
       h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out")),
     h("main", { className: "pageBody" },
       route.name === "company"
-        ? h(CompanyDetailScreen, { id: route.id, onUpdated })
+        ? h(CompanyDetailScreen, { id: route.id, onUpdated, onDeleted: (gone) => {
+            // Nothing is left to save, so leave without asking.
+            leaveGuard = null;
+            onDeleted(gone);
+            window.location.hash = "";
+          } })
         : h(CompanyListScreen, { companies, onCreated })));
 }
 
@@ -844,6 +941,7 @@ function App() {
     onCreated: (company) => setCompanies((list) => [...list, company]),
     // So the list is current on the way back from an edit, without a refetch.
     onUpdated: (company) => setCompanies((list) => list.map((c) => (c.id === company.id ? company : c))),
+    onDeleted: (gone) => setCompanies((list) => list.filter((c) => c.id !== gone)),
     onSignOut: signOut,
   });
 }
@@ -952,6 +1050,17 @@ select.loginInput{appearance:auto}
 .toggleOn .toggleKnob{transform:translateX(20px)}
 .toggle:focus-visible{outline:2px solid var(--periwinkle);outline-offset:2px}
 .toggle:disabled{opacity:0.6;cursor:default}
+
+.dangerBtn{font:inherit;font-weight:600;color:#000;background:var(--terracotta);border:0;
+  border-radius:999px;padding:9px 18px;cursor:pointer;white-space:nowrap}
+.dangerBtn:hover{filter:brightness(1.05)}
+.dangerBtn:focus-visible{outline:2px solid #000;outline-offset:2px}
+.dangerBtn:disabled{opacity:0.5;cursor:default}
+.deleteBox{padding:16px;border:1px solid var(--terracotta);border-radius:var(--radius);display:flex;flex-direction:column}
+.deleteBox .loginError{margin:0 0 16px}
+.deleteTitle{font-weight:600;margin:0 0 8px}
+.deleteList{margin:0 0 16px;padding-left:20px}
+.deleteList li{margin:2px 0}
 `;
 const style = document.createElement("style");
 style.textContent = css;
