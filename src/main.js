@@ -392,57 +392,41 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
       }, h("span", { className: "toggleKnob" }))));
 }
 
-// The checklist items company_setup_status returns, in its order, as the
-// company's Exec sees them in fleetr. detail is what is still missing.
+// The setup steps company_setup_status returns, in its order, as the
+// company's Exec sees them on the Company page in fleetr. detail is what is
+// still missing.
 const SETUP_ITEMS = {
-  units:                 "Fuel and distance units",
-  branches:              "Each branch's sales tax",
-  branch_addresses:      "A full address for every branch",
-  pickup_locations:      "Pickup locations for every open branch",
+  branch:                "Branch: address, map pin, phone number and sales tax",
   vehicle_classes:       "Vehicle classes",
-  sources:               "Sources",
-  daily_rates:           "A daily rate for every vehicle class",
-  acknowledgements:      "Contract acknowledgements",
+  rates:                 "A daily rate for every vehicle class",
   vehicles:              "A vehicle at the default branch",
-  confirmation_text:     "Reservation confirmation text",
+  protection:            "Protection and deductibles",
+  contract:              "Contract terms",
   listing:               "Complete fleetr.ai listing for every listed branch",
-  test_rentals_finished: "Test rentals finished",
-  other_texts:           "Other customer texts",
-  protection_products:   "Protection products",
-  deductibles:           "Deductibles",
-  gas:                   "Fuel pricing for every branch",
   staff:                 "Staff besides the Exec",
-  test_rental:           "A test rental, start to finish",
+  test_rentals_finished: "Test rentals finished",
 };
 // Why an item that is not done is not done, from its detail.
 function setupReason(item) {
   const list = Array.isArray(item.detail) ? item.detail : [];
+  if (item.skipped) return "Skipped for now.";
   switch (item.key) {
-    case "units":             return "Not chosen yet.";
-    case "branches":          return list.length ? `No sales tax saved: ${list.join(", ")}.` : "No open branch.";
-    case "branch_addresses":  return list.length ? `No full address with a map pin: ${list.join(", ")}.` : "No open branch.";
-    case "pickup_locations":  return list.length ? `None at: ${list.join(", ")}.` : "No open branch.";
+    case "branch":            return list.length ? `No full address, map pin, phone number or confirmed sales tax: ${list.join(", ")}.` : "No open branch.";
     case "vehicle_classes":   return "None added.";
-    case "sources":           return "None added.";
-    case "daily_rates":       return list.length ? `No rate for: ${list.join(", ")}.` : "No vehicle classes yet.";
-    case "acknowledgements":  return "Not written.";
+    case "rates":             return list.length ? `No rate for: ${list.join(", ")}.` : "No vehicle classes yet.";
     case "vehicles":          return "No vehicle with one of the company's classes at its default branch.";
-    case "confirmation_text": return "Not written, so it is not sent.";
+    case "protection":        return list.length ? `Missing a price or decline wording: ${list.join(", ")}.` : "None added.";
+    case "contract":          return "Not saved yet.";
     case "listing":           return list.length ? `Incomplete: ${list.join(", ")}.` : "No branch is listed.";
-    case "test_rentals_finished": return `Still open: ${list.join(", ")}.`;
-    case "other_texts":       return `Not written, so not sent: ${list.join(", ")}.`;
-    case "protection_products": return list.length ? `Missing a price or decline wording: ${list.join(", ")}.` : "None added.";
-    case "deductibles":       return "None set.";
-    case "gas":               return list.length ? `No markup or prices at: ${list.join(", ")}.` : "No open branch.";
     case "staff":             return "Only the Exec so far.";
-    case "test_rental":       return "None closed yet.";
+    case "test_rentals_finished": return `Still open: ${list.join(", ")}.`;
     default:                  return "";
   }
 }
 
 function SetupItem({ item }) {
   return h("li", { className: "setupItem" },
-    h("span", { className: item.done ? "setupDone" : "setupLeft" }, item.done ? "Done" : "Left"),
+    h("span", { className: item.done ? "setupDone" : "setupLeft" }, item.done ? "Done" : item.skipped ? "Skip" : "Left"),
     h("span", null, SETUP_ITEMS[item.key] || item.key),
     !item.done && h("span", { className: "muted" }, ` ${setupReason(item)}`));
 }
