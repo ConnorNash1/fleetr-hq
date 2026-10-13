@@ -147,8 +147,13 @@ function LoginScreen({ onSuccess, notice }) {
 
   return h("div", { className: "loginWrap" },
     h("div", { className: "loginCard" },
-      h("div", { className: "accentBar", "aria-hidden": "true" },
-        h("span", { style: { background: "var(--terracotta)" } })),
+      // A short terracotta light runs round the edge of the card, one side
+      // after the next. Still, as a plain top bar, for reduced motion.
+      h("div", { className: "loginBeams", "aria-hidden": "true" },
+        h("span", { className: "loginBeam loginBeam--top" }),
+        h("span", { className: "loginBeam loginBeam--right" }),
+        h("span", { className: "loginBeam loginBeam--bottom" }),
+        h("span", { className: "loginBeam loginBeam--left" })),
       h(Wordmark),
       h("div", { className: "loginSubtitle" }, "Platform admins only."),
       h("form", { className: "loginForm", onSubmit: handleSubmit },
@@ -946,8 +951,24 @@ const css = `
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
 .loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;background:var(--card);
   border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;text-align:center}
-.accentBar{position:absolute;top:0;left:0;right:0;display:flex;height:4px}
-.accentBar span{flex:1}
+.loginCard{box-shadow:0 1px 2px rgba(31,30,29,0.05),0 12px 32px rgba(31,30,29,0.08)}
+.loginBeams{position:absolute;inset:0;pointer-events:none;border-radius:inherit;overflow:hidden}
+.loginBeam{position:absolute;display:block}
+.loginBeam--top,.loginBeam--bottom{height:2px;width:45%}
+.loginBeam--left,.loginBeam--right{width:2px;height:45%}
+.loginBeam--top{top:0;left:-45%;background:linear-gradient(90deg,transparent,var(--terracotta));animation:beamTop 6s linear infinite}
+.loginBeam--right{right:0;top:-45%;background:linear-gradient(180deg,transparent,var(--terracotta));animation:beamRight 6s linear infinite}
+.loginBeam--bottom{bottom:0;right:-45%;background:linear-gradient(270deg,transparent,var(--terracotta));animation:beamBottom 6s linear infinite}
+.loginBeam--left{left:0;bottom:-45%;background:linear-gradient(0deg,transparent,var(--terracotta));animation:beamLeft 6s linear infinite}
+@keyframes beamTop{0%{left:-45%}25%,100%{left:100%}}
+@keyframes beamRight{0%,25%{top:-45%}50%,100%{top:100%}}
+@keyframes beamBottom{0%,50%{right:-45%}75%,100%{right:100%}}
+@keyframes beamLeft{0%,75%{bottom:-45%}100%{bottom:100%}}
+@media (prefers-reduced-motion:reduce){
+  .loginBeam{animation:none}
+  .loginBeam--top{left:0;width:100%;height:4px;background:var(--terracotta)}
+  .loginBeam--right,.loginBeam--bottom,.loginBeam--left{display:none}
+}
 .loginSubtitle{color:var(--muted);font-size:0.9rem;margin:4px 0 24px}
 .loginForm{display:flex;flex-direction:column;text-align:left}
 .loginLabel{font-size:0.8rem;font-weight:600;margin:0 0 6px}
