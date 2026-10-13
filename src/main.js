@@ -396,7 +396,7 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
 // company's Exec sees them on the Company page in fleetr. detail is what is
 // still missing.
 const SETUP_ITEMS = {
-  branch:                "Branch: address, map pin, phone number and sales tax",
+  branch:                "Branch: address, map pin and sales tax",
   vehicle_classes:       "Vehicle classes",
   rates:                 "A daily rate for every vehicle class",
   vehicles:              "A vehicle at the default branch",
@@ -411,7 +411,7 @@ function setupReason(item) {
   const list = Array.isArray(item.detail) ? item.detail : [];
   if (item.skipped) return "Skipped for now.";
   switch (item.key) {
-    case "branch":            return list.length ? `No full address, map pin, phone number or confirmed sales tax: ${list.join(", ")}.` : "No open branch.";
+    case "branch":            return list.length ? `No full address, map pin or confirmed sales tax: ${list.join(", ")}.` : "No open branch.";
     case "vehicle_classes":   return "None added.";
     case "rates":             return list.length ? `No rate for: ${list.join(", ")}.` : "No vehicle classes yet.";
     case "vehicles":          return "No vehicle with one of the company's classes at its default branch.";
