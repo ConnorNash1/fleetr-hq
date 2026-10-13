@@ -148,9 +148,7 @@ function LoginScreen({ onSuccess, notice }) {
   return h("div", { className: "loginWrap" },
     h("div", { className: "loginCard" },
       h("div", { className: "accentBar", "aria-hidden": "true" },
-        h("span", { style: { background: "var(--terracotta)" } }),
-        h("span", { style: { background: "var(--periwinkle)" } }),
-        h("span", { style: { background: "var(--green)" } })),
+        h("span", { style: { background: "var(--terracotta)" } })),
       h(Wordmark),
       h("div", { className: "loginSubtitle" }, "Platform admins only."),
       h("form", { className: "loginForm", onSubmit: handleSubmit },
@@ -931,8 +929,9 @@ function App() {
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
-// Tokens live in index.html. Accents carry black text, never white: none of the
-// three reaches a readable contrast against white at body sizes.
+// Tokens live in index.html: the neutral and terracotta palette of the staff
+// app. Terracotta carries dark ink text, never white, which is not readable on
+// it; text in terracotta uses the deeper --terracotta-text.
 const css = `
 .wordmark{font-size:1.75rem;font-weight:700;letter-spacing:-0.02em}
 .wordmarkHq{font-weight:500;color:var(--muted);margin-left:6px}
@@ -945,45 +944,46 @@ const css = `
 .staffActions{display:flex;gap:14px;flex-wrap:wrap;white-space:nowrap}
 
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
-.loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;
+.loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;background:var(--card);
   border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;text-align:center}
 .accentBar{position:absolute;top:0;left:0;right:0;display:flex;height:4px}
 .accentBar span{flex:1}
 .loginSubtitle{color:var(--muted);font-size:0.9rem;margin:4px 0 24px}
 .loginForm{display:flex;flex-direction:column;text-align:left}
 .loginLabel{font-size:0.8rem;font-weight:600;margin:0 0 6px}
-.loginInput{font:inherit;color:var(--text);background:var(--bg);padding:10px 12px;margin-bottom:16px;
+.loginInput{font:inherit;color:var(--text);background:var(--card);padding:10px 12px;margin-bottom:16px;
   border:1px solid var(--border);border-radius:8px}
-.loginInput:focus{outline:2px solid var(--periwinkle);outline-offset:1px;border-color:var(--periwinkle)}
-.loginBtn{font:inherit;font-weight:600;color:#000;background:var(--periwinkle);border:0;
+.loginInput:focus{outline:2px solid var(--terracotta);outline-offset:1px;border-color:var(--terracotta)}
+.loginBtn{font:inherit;font-weight:600;color:var(--text);background:var(--terracotta);border:0;
   border-radius:999px;padding:11px;cursor:pointer;margin-top:4px}
-.loginBtn:hover{filter:brightness(1.05)}
-.loginBtn:focus-visible{outline:2px solid #000;outline-offset:2px}
+.loginBtn:hover:not(:disabled){background:var(--terracotta-hover)}
+.loginBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .loginBtn:disabled{opacity:0.6;cursor:default}
 .loginError{margin-top:16px;padding:10px 12px;font-size:0.9rem;font-weight:500;
-  background:rgba(244,132,95,0.14);border-left:3px solid var(--terracotta);border-radius:6px}
+  background:rgba(192,57,43,0.08);border-left:3px solid #c0392b;border-radius:6px}
 
 .page{max-width:880px;margin:0 auto;padding:24px}
 .pageHeader{display:flex;align-items:center;justify-content:space-between;
-  padding-bottom:16px;border-bottom:2px solid var(--green)}
+  padding-bottom:16px;border-bottom:2px solid var(--terracotta)}
 .pageBody{padding-top:24px}
 .pageTitle{font-size:1.25rem;font-weight:600;margin:0 0 16px}
 .linkBtn{font:inherit;font-weight:500;color:var(--text);background:none;border:0;cursor:pointer;
-  text-decoration:underline;text-decoration-color:var(--periwinkle);text-decoration-thickness:2px;
+  text-decoration:underline;text-decoration-color:var(--terracotta);text-decoration-thickness:2px;
   text-underline-offset:4px}
+.linkBtn:hover:not(:disabled){color:var(--terracotta-text)}
 .linkBtn:disabled{opacity:0.5;cursor:default}
 .homeLink{color:inherit;text-decoration:none}
 .backLink{display:inline-block;margin-bottom:16px}
 
 .titleRow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
 .titleRow .pageTitle{margin:0}
-.primaryBtn{font:inherit;font-weight:600;color:#000;background:var(--periwinkle);border:0;
+.primaryBtn{font:inherit;font-weight:600;color:var(--text);background:var(--terracotta);border:0;
   border-radius:999px;padding:9px 18px;cursor:pointer;white-space:nowrap}
-.primaryBtn:hover{filter:brightness(1.05)}
-.primaryBtn:focus-visible{outline:2px solid #000;outline-offset:2px}
+.primaryBtn:hover:not(:disabled){background:var(--terracotta-hover)}
+.primaryBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
 .primaryBtn:disabled{opacity:0.6;cursor:default}
 
-.newCompany{margin-bottom:24px;padding:16px;border:1px solid var(--border);border-radius:var(--radius)}
+.newCompany{margin-bottom:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
 .newCompanyRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .newCompanyRow .loginInput{flex:1;min-width:200px;margin:0}
 .newCompany .loginError{margin-top:12px}
@@ -994,17 +994,17 @@ const css = `
   letter-spacing:0.04em;color:var(--muted);padding:0 12px 10px;border-bottom:1px solid var(--border)}
 .companyTable td{padding:12px;border-bottom:1px solid var(--border);vertical-align:middle}
 .companyTable th:first-child,.companyTable td:first-child{padding-left:0}
-.companyTable tbody tr:hover{background:rgba(123,147,255,0.06)}
+.companyTable tbody tr:hover{background:rgba(244,132,95,0.06)}
 .companyLink{color:var(--text);font-weight:500;text-decoration:none}
 .companyLink:hover,.companyLink:focus-visible{text-decoration:underline;
-  text-decoration-color:var(--periwinkle);text-decoration-thickness:2px;text-underline-offset:4px}
+  text-decoration-color:var(--terracotta);text-decoration-thickness:2px;text-underline-offset:4px}
 
 .badge{display:inline-block;font-size:0.8rem;font-weight:500;padding:2px 10px;border-radius:999px;
   border:1px solid transparent}
-.badge-trial{background:rgba(123,147,255,0.16);border-color:var(--periwinkle)}
+.badge-trial{background:#F1F0EC;border-color:rgba(31,30,29,0.28)}
 .badge-active{background:rgba(107,203,119,0.18);border-color:var(--green)}
 .badge-suspended{background:rgba(244,132,95,0.16);border-color:var(--terracotta)}
-.badge-unknown{background:rgba(0,0,0,0.05);border-color:var(--border)}
+.badge-unknown{background:rgba(31,30,29,0.05);border-color:var(--border)}
 
 .titleRow .badge{margin-right:auto}
 .detailSection{padding:24px 0;border-top:1px solid var(--border)}
@@ -1026,21 +1026,23 @@ select.loginInput{appearance:auto}
 .featureLabel{font-weight:500}
 .featureControl{display:flex;align-items:center;gap:10px}
 .featureState{font-size:0.85rem;color:var(--muted);min-width:3.5em;text-align:right}
-.toggle{position:relative;width:44px;height:24px;border-radius:999px;border:1px solid rgba(0,0,0,0.25);
-  background:rgba(0,0,0,0.08);cursor:pointer;padding:0;transition:background .15s,border-color .15s}
-.toggleOn{background:var(--green);border-color:var(--green)}
+.toggle{position:relative;width:44px;height:24px;border-radius:999px;border:1px solid rgba(31,30,29,0.25);
+  background:rgba(31,30,29,0.08);cursor:pointer;padding:0;transition:background .15s,border-color .15s}
+.toggleOn{background:var(--terracotta);border-color:var(--terracotta)}
 .toggleKnob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
-  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.3);transition:transform .15s}
+  background:#fff;box-shadow:0 1px 2px rgba(31,30,29,0.3);transition:transform .15s}
 .toggleOn .toggleKnob{transform:translateX(20px)}
-.toggle:focus-visible{outline:2px solid var(--periwinkle);outline-offset:2px}
+.toggle:focus-visible{outline:2px solid var(--terracotta);outline-offset:2px}
 .toggle:disabled{opacity:0.6;cursor:default}
 
-.dangerBtn{font:inherit;font-weight:600;color:#000;background:var(--terracotta);border:0;
+/* Dark, not terracotta: terracotta is the ordinary action now, and a delete
+   must not look like one. */
+.dangerBtn{font:inherit;font-weight:600;color:var(--bg);background:var(--text);border:0;
   border-radius:999px;padding:9px 18px;cursor:pointer;white-space:nowrap}
-.dangerBtn:hover{filter:brightness(1.05)}
-.dangerBtn:focus-visible{outline:2px solid #000;outline-offset:2px}
+.dangerBtn:hover:not(:disabled){background:#3A3936}
+.dangerBtn:focus-visible{outline:2px solid var(--terracotta);outline-offset:2px}
 .dangerBtn:disabled{opacity:0.5;cursor:default}
-.deleteBox{padding:16px;border:1px solid var(--terracotta);border-radius:var(--radius);display:flex;flex-direction:column}
+.deleteBox{padding:16px;background:var(--card);border:1px solid var(--terracotta);border-radius:var(--radius);display:flex;flex-direction:column}
 .deleteBox .loginError{margin:0 0 16px}
 .deleteTitle{font-weight:600;margin:0 0 8px}
 .deleteList{margin:0 0 16px;padding-left:20px}
