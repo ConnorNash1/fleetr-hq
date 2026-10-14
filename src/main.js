@@ -405,7 +405,7 @@ const SETUP_ITEMS = {
   vehicles:              "A vehicle at the default branch",
   protection:            "Protection and deductibles",
   contract:              "Contract terms",
-  listing:               "Complete fleetr.ai listing for every listed branch",
+  listing:               "fleetr.ai listing",
   staff:                 "Staff besides the Exec",
   test_rentals_finished: "Test rentals finished",
 };
