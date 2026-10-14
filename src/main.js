@@ -120,6 +120,91 @@ async function resumeSession() {
   return passGateOrSignOut();
 }
 
+// ─── Shared pieces ────────────────────────────────────────────────────────────
+// Line icons on a 24 grid, the staff app's style.
+const ICONS = {
+  companies: ["M3 21h18", "M5 21V7l7-4 7 4v14", "M9 9h.01", "M15 9h.01", "M9 13h.01", "M15 13h.01", "M10 21v-4h4v4"],
+  texts:     ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", "M8 9h8", "M8 13h5"],
+  plus:      ["M12 5v14", "M5 12h14"],
+  search:    ["M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z", "M21 21l-4.3-4.3"],
+  chevron:   ["M9 18l6-6-6-6"],
+  check:     ["M20 6L9 17l-5-5"],
+  copy:      ["M9 9h11v11H9z", "M5 15H4V4h11v1"],
+  close:     ["M18 6L6 18", "M6 6l12 12"],
+  menu:      ["M3 6h18", "M3 12h18", "M3 18h18"],
+  signOut:   ["M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", "M16 17l5-5-5-5", "M21 12H9"],
+  sort:      ["M7 15l5 5 5-5", "M7 9l5-5 5 5"],
+  dash:      ["M6 12h12"],
+};
+function Icon({ name, size = 18, className }) {
+  return h("svg", { className, width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+    strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    (ICONS[name] || []).map((d, i) => h("path", { key: i, d })));
+}
+
+// A company's or person's initials, for the round avatars.
+const initialsOf = (name) => String(name || "").trim().split(/\s+/).filter(Boolean).slice(0, 2)
+  .map((w) => w[0].toUpperCase()).join("") || "?";
+function Avatar({ name, size }) {
+  return h("span", { className: `avatar${size === "lg" ? " avatar--lg" : ""}`, "aria-hidden": "true" }, initialsOf(name));
+}
+
+const prefersReducedMotion = () => {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
+};
+// Counts up to the value, as the staff app's Home numbers do.
+function CountUp({ value }) {
+  const still = prefersReducedMotion();
+  const [shown, setShown] = React.useState(still ? value : 0);
+  const at = React.useRef(still ? value : 0);
+  React.useEffect(() => {
+    // A hidden tab runs no animation frames, so it shows the number at once.
+    if (prefersReducedMotion() || document.hidden) { at.current = value; setShown(value); return undefined; }
+    const from = at.current, start = performance.now();
+    let raf = 0;
+    const tick = (now) => {
+      const p = Math.min(1, (now - start) / 800);
+      at.current = from + (value - from) * (1 - Math.pow(1 - p, 3));
+      setShown(Math.round(at.current));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return shown.toLocaleString();
+}
+
+// Toasts: a short message in the corner that goes by itself, for a save that
+// worked. Errors stay where they happened, beside what failed.
+const toastListeners = new Set();
+let toastSeq = 0;
+function toast(text) { const t = { id: ++toastSeq, text }; toastListeners.forEach((fn) => fn(t)); }
+function Toaster() {
+  const [list, setList] = React.useState([]);
+  React.useEffect(() => {
+    const add = (t) => {
+      setList((l) => [...l.slice(-2), t]);
+      setTimeout(() => setList((l) => l.filter((x) => x.id !== t.id)), 4000);
+    };
+    toastListeners.add(add);
+    return () => toastListeners.delete(add);
+  }, []);
+  return h("div", { className: "toaster", role: "status", "aria-live": "polite" },
+    list.map((t) => h("div", { key: t.id, className: "toast" },
+      h("span", { className: "toast__icon" }, h(Icon, { name: "check", size: 14 })),
+      h("span", { className: "toast__text" }, t.text),
+      h("button", { type: "button", className: "toast__close", "aria-label": "Dismiss",
+        onClick: () => setList((l) => l.filter((x) => x.id !== t.id)) }, h(Icon, { name: "close", size: 14 })))));
+}
+
+// Grey shapes with a sheen passing over them while something loads, the
+// website's skeleton.
+function Skeleton({ lines = 3 }) {
+  return h("div", { className: "skel", "aria-busy": "true", "aria-label": "Loading" },
+    h("div", { className: "sk sk--title" }),
+    Array.from({ length: lines }, (_, i) => h("div", { key: i, className: "sk sk--row" })));
+}
+
 // ─── Screens ──────────────────────────────────────────────────────────────────
 function Wordmark() {
   return h("div", { className: "wordmark" },
@@ -239,7 +324,14 @@ const STATUS_LABELS = { trial: "Trial", active: "Active", suspended: "Suspended"
 
 function StatusBadge({ status }) {
   return h("span", { className: `badge badge-${STATUS_LABELS[status] ? status : "unknown"}` },
+    h("span", { className: "badge__dot", "aria-hidden": "true" }),
     STATUS_LABELS[status] || status || "Unknown");
+}
+
+// Where a company is in its own setup, as a pill.
+function SetupBadge({ company }) {
+  const label = setupStateLabel(company);
+  return h("span", { className: `pill pill--${label === "Live" ? "live" : label === "Paused" ? "paused" : "setup"}` }, label);
 }
 
 // Where a company is in its own setup: before launch, paused by its Exec, or
@@ -269,50 +361,123 @@ function NewCompanyForm({ onCreated, onCancel }) {
       .finally(() => setSaving(false));
   };
 
-  return h("form", { className: "newCompany", onSubmit: handleSubmit },
-    h("label", { className: "loginLabel", htmlFor: "newCompanyName" }, "Company name"),
-    h("div", { className: "newCompanyRow" },
+  // A dialog over the list. Escape or a click outside closes it.
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape" && !saving) onCancel(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saving, onCancel]);
+  return h("div", { className: "dialogBackdrop", onMouseDown: (e) => { if (e.target === e.currentTarget && !saving) onCancel(); } },
+    h("form", { className: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "newCompanyTitle", onSubmit: handleSubmit },
+      h("div", { className: "dialog__head" },
+        h("h2", { id: "newCompanyTitle", className: "dialog__title" }, "New company"),
+        h("button", { type: "button", className: "iconBtn", "aria-label": "Close", onClick: onCancel, disabled: saving }, h(Icon, { name: "close" }))),
+      h("p", { className: "muted dialog__sub" }, "It starts in setup, with a join code and no branch. You open its first branch from its page."),
+      h("label", { className: "loginLabel", htmlFor: "newCompanyName" }, "Company name"),
       h("input", {
         id: "newCompanyName", className: "loginInput", type: "text", autoFocus: true,
         maxLength: 200, value: name, disabled: saving,
         onChange: (e) => { setName(e.target.value); setError(""); },
-        onKeyDown: (e) => { if (e.key === "Escape") onCancel(); },
       }),
-      h("button", { type: "submit", className: "primaryBtn", disabled: saving },
-        saving ? "Creating…" : "Create"),
-      h("button", { type: "button", className: "linkBtn", onClick: onCancel, disabled: saving }, "Cancel")),
-    error && h("div", { className: "loginError", role: "alert" }, error));
+      error && h("div", { className: "loginError", role: "alert", style: { margin: "0 0 16px" } }, error),
+      h("div", { className: "dialog__actions" },
+        h("button", { type: "button", className: "secondaryBtn", onClick: onCancel, disabled: saving }, "Cancel"),
+        h("button", { type: "submit", className: "primaryBtn", disabled: saving }, saving ? "Creating…" : "Create company"))));
+}
+
+// The filters above the list, in order. Live, In setup and Paused are where a
+// company is in its own setup; Suspended is its status, set here.
+const LIST_FILTERS = [
+  ["all",       "All",       () => true],
+  ["live",      "Live",      (c) => c.status !== "suspended" && setupStateLabel(c) === "Live"],
+  ["setup",     "In setup",  (c) => !c.launchedAt],
+  ["paused",    "Paused",    (c) => !!c.launchedAt && !!c.pausedAt],
+  ["suspended", "Suspended", (c) => c.status === "suspended"],
+];
+
+function StatTile({ label, value, active, onClick }) {
+  return h("button", { type: "button", className: `statTile${active ? " statTile--on" : ""}`, onClick, "aria-pressed": active },
+    h("span", { className: "statTile__value" }, h(CountUp, { value })),
+    h("span", { className: "statTile__label" }, label));
 }
 
 function CompanyListScreen({ companies, onCreated }) {
   const [creating, setCreating] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const [filter, setFilter] = React.useState("all");
+  const [desc, setDesc] = React.useState(false);
+
+  const count = (key) => companies.filter(LIST_FILTERS.find(([k]) => k === key)[2]).length;
+  const q = query.trim().toLowerCase();
+  const shown = companies
+    .filter(LIST_FILTERS.find(([k]) => k === filter)[2])
+    .filter((c) => !q || String(c.name).toLowerCase().includes(q) || String(c.planTier || "").toLowerCase().includes(q))
+    .slice().sort((x, y) => String(x.name).localeCompare(String(y.name)) * (desc ? -1 : 1));
+  const open = (c) => { window.location.hash = `#/company/${encodeURIComponent(c.id)}`; };
 
   return h(React.Fragment, null,
     h("div", { className: "titleRow" },
-      h("h1", { className: "pageTitle" }, "Companies"),
-      !creating && h("button", { type: "button", className: "primaryBtn", onClick: () => setCreating(true) },
-        "New Company")),
+      h("div", null,
+        h("h1", { className: "pageTitle" }, "Companies"),
+        h("p", { className: "muted pageSub" }, `${companies.length} ${companies.length === 1 ? "company" : "companies"} on fleetr`)),
+      // The website's motion button: the ink circle grows across on hover.
+      h("button", { type: "button", className: "motionBtn", onClick: () => setCreating(true) },
+        h("span", { className: "motionBtn__fill", "aria-hidden": "true" }),
+        h("span", { className: "motionBtn__icon" }, h(Icon, { name: "plus", size: 18 })),
+        h("span", { className: "motionBtn__label" }, "New company"))),
+
+    h("div", { className: "statRow" },
+      [["all", "Companies"], ["live", "Live"], ["setup", "In setup"], ["suspended", "Suspended"]].map(([key, label]) =>
+        h(StatTile, { key, label, value: count(key), active: filter === key && key !== "all",
+          onClick: () => setFilter(filter === key ? "all" : key) }))),
+
     creating && h(NewCompanyForm, {
-      onCreated: (company) => { onCreated(company); setCreating(false); },
+      onCreated: (company) => { onCreated(company); setCreating(false); toast(`${company.name} was created.`); open(company); },
       onCancel: () => setCreating(false),
     }),
-    companies.length === 0
-      ? h("p", { className: "muted" }, "No companies yet.")
-      : h("div", { className: "tableWrap" },
-          h("table", { className: "companyTable" },
-            h("thead", null,
-              h("tr", null,
-                h("th", { scope: "col" }, "Name"),
-                h("th", { scope: "col" }, "Status"),
-                h("th", { scope: "col" }, "Setup"),
-                h("th", { scope: "col" }, "Plan"))),
-            h("tbody", null,
-              companies.map((c) => h("tr", { key: c.id },
-                h("td", null,
-                  h("a", { className: "companyLink", href: `#/company/${encodeURIComponent(c.id)}` }, c.name)),
-                h("td", null, h(StatusBadge, { status: c.status })),
-                h("td", null, setupStateLabel(c)),
-                h("td", null, c.planTier || h("span", { className: "muted" }, "Not set"))))))));
+
+    h("div", { className: "card listCard" },
+      h("div", { className: "toolbar" },
+        h("label", { className: "searchBox" },
+          h(Icon, { name: "search", size: 16 }),
+          h("input", { type: "search", placeholder: "Search companies", value: query, "aria-label": "Search companies",
+            onChange: (e) => setQuery(e.target.value) })),
+        h("div", { className: "chips", role: "group", "aria-label": "Filter companies" },
+          LIST_FILTERS.map(([key, label]) => h("button", {
+            key, type: "button", className: `chip${filter === key ? " chip--on" : ""}`, "aria-pressed": filter === key,
+            onClick: () => setFilter(key),
+          }, label, h("span", { className: "chip__count" }, count(key)))))),
+      companies.length === 0
+        ? h("div", { className: "emptyState" },
+            h("div", { className: "emptyState__icon" }, h(Icon, { name: "companies", size: 22 })),
+            h("p", { className: "emptyState__title" }, "No companies yet"),
+            h("p", { className: "muted" }, "Create the first one to give it a join code."))
+        : shown.length === 0
+          ? h("div", { className: "emptyState" },
+              h("p", { className: "emptyState__title" }, "No companies match"),
+              h("button", { type: "button", className: "secondaryBtn", onClick: () => { setQuery(""); setFilter("all"); } }, "Clear search and filters"))
+          : h("div", { className: "tableWrap" },
+              h("table", { className: "companyTable" },
+                h("thead", null,
+                  h("tr", null,
+                    h("th", { scope: "col", "aria-sort": desc ? "descending" : "ascending" },
+                      h("button", { type: "button", className: "sortBtn", onClick: () => setDesc((d) => !d) },
+                        "Company", h(Icon, { name: "sort", size: 13 }))),
+                    h("th", { scope: "col" }, "Status"),
+                    h("th", { scope: "col" }, "Setup"),
+                    h("th", { scope: "col" }, "Plan"),
+                    h("th", { scope: "col", "aria-label": "Open" }))),
+                h("tbody", null,
+                  shown.map((c) => h("tr", { key: c.id, className: "rowLink", onClick: () => open(c) },
+                    h("td", null,
+                      h("div", { className: "nameCell" },
+                        h(Avatar, { name: c.name }),
+                        h("a", { className: "companyLink", href: `#/company/${encodeURIComponent(c.id)}`,
+                          onClick: (e) => e.stopPropagation() }, c.name))),
+                    h("td", null, h(StatusBadge, { status: c.status })),
+                    h("td", null, h(SetupBadge, { company: c })),
+                    h("td", null, c.planTier || h("span", { className: "muted" }, "Not set")),
+                    h("td", { className: "rowChevron" }, h(Icon, { name: "chevron", size: 16 })))))))));
 }
 
 // ─── Company detail ───────────────────────────────────────────────────────────
@@ -428,11 +593,17 @@ function setupReason(item) {
   }
 }
 
+// One step, as a row of the website's timeline: a round node, done or not,
+// joined to the next by a line.
 function SetupItem({ item }) {
-  return h("li", { className: "setupItem" },
-    h("span", { className: item.done ? "setupDone" : "setupLeft" }, item.done ? "Done" : item.skipped ? "Skip" : "Left"),
-    h("span", null, SETUP_ITEMS[item.key] || item.key),
-    !item.done && h("span", { className: "muted" }, ` ${setupReason(item)}`));
+  const state = item.done ? "done" : item.skipped ? "skipped" : "left";
+  return h("li", { className: `step step--${state}` },
+    h("span", { className: "step__node", "aria-hidden": "true" },
+      item.done ? h(Icon, { name: "check", size: 14 }) : item.skipped ? h(Icon, { name: "dash", size: 14 }) : null),
+    h("div", { className: "step__body" },
+      h("div", { className: "step__title" }, SETUP_ITEMS[item.key] || item.key,
+        h("span", { className: "step__state" }, item.done ? "Done" : item.skipped ? "Skipped" : "Left to do")),
+      !item.done && h("div", { className: "muted step__why" }, setupReason(item))));
 }
 
 // Read only. HQ sees the company's progress; only its Exec can launch,
@@ -450,7 +621,7 @@ function SetupProgress({ id }) {
   }, [id]);
 
   const body = () => {
-    if (state === undefined) return h("p", { className: "muted" }, "Loading…");
+    if (state === undefined) return h(Skeleton, { lines: 4 });
     if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
     const s = state.setup;
     const required = s.items.filter((i) => i.required);
@@ -461,12 +632,20 @@ function SetupProgress({ id }) {
       : s.suspended ? "Launched, and suspended here: hidden from fleetr.ai with no online bookings until the status is changed back. Texts for existing bookings still go."
       : s.paused ? "Launched, and paused by its Exec: hidden from fleetr.ai with no online bookings. Texts for existing bookings still go."
       : "Launched and live.";
+    const doneCount = required.length - left;
+    const pct = required.length ? Math.round((doneCount / required.length) * 100) : 100;
     return h(React.Fragment, null,
-      h("p", null, where),
+      h("div", { className: "progress" },
+        h("div", { className: "progress__top" },
+          h("span", { className: "progress__count" }, `${doneCount} of ${required.length} required done`),
+          h("span", { className: "progress__pct" }, `${pct}%`)),
+        h("div", { className: "progress__bar", role: "progressbar", "aria-valuemin": 0, "aria-valuemax": 100, "aria-valuenow": pct, "aria-label": "Setup progress" },
+          h("span", { style: { width: `${pct}%` } }))),
+      h("p", { className: "setupWhere" }, where),
       h("h3", { className: "setupHeading" }, "Required before launch"),
-      h("ul", { className: "setupList" }, required.map((i) => h(SetupItem, { key: i.key, item: i }))),
-      h("h3", { className: "setupHeading" }, "Optional"),
-      h("ul", { className: "setupList" }, optional.map((i) => h(SetupItem, { key: i.key, item: i }))));
+      h("ul", { className: "steps" }, required.map((i) => h(SetupItem, { key: i.key, item: i }))),
+      optional.length > 0 && h("h3", { className: "setupHeading" }, "Optional"),
+      optional.length > 0 && h("ul", { className: "steps" }, optional.map((i) => h(SetupItem, { key: i.key, item: i }))));
   };
 
   return h("section", { className: "detailSection" },
@@ -543,16 +722,18 @@ function CompanyStaff({ id, company, onChanged }) {
       { method: approve ? "POST" : "DELETE" })
       .then((r) => {
         if (!r.ok) { setActErr(r.message); return; }
-        setActMsg(approve ? `${person.name} is now the Exec.`
+        const done = approve ? `${person.name} is now the Exec.`
           : r.body.removed ? `${person.name}'s sign-up was declined.`
-          : `${person.name}'s sign-up was declined. Their account is kept, deactivated, because records point at it.`);
+          : `${person.name}'s sign-up was declined. Their account is kept, deactivated, because records point at it.`;
+        setActMsg(done);
+        toast(done);
         refresh();
       })
       .finally(() => setBusyId(null));
   };
 
   const body = () => {
-    if (state === undefined) return h("p", { className: "muted" }, "Loading…");
+    if (state === undefined) return h(Skeleton, { lines: 3 });
     if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
     const { staff, branches } = state;
     const branchName = (s) => (s.role === "Exec" ? "All branches"
@@ -572,11 +753,13 @@ function CompanyStaff({ id, company, onChanged }) {
                 staff.map((s) => {
                   const pending = !!s.pendingApprovalSince;
                   return h("tr", { key: s.id },
-                    h("td", null, s.name, h("div", { className: "muted" }, s.username)),
+                    h("td", null, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
+                      h("div", null, s.name, h("div", { className: "muted small" }, s.username)))),
                     h("td", null, s.recoveryEmail || h("span", { className: "muted" }, "None")),
                     h("td", null, s.role),
                     h("td", null, branchName(s)),
-                    h("td", null, pending ? "Pending" : s.active ? "Approved" : "Approved, deactivated"),
+                    h("td", null, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
+                      pending ? "Pending" : s.active ? "Approved" : "Deactivated")),
                     h("td", null, signedUpOn(s.createdAt)),
                     h("td", null, pending && h("div", { className: "staffActions" },
                       !hasExec && h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
@@ -699,6 +882,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
   const [featMsg,  setFeatMsg]  = React.useState("");
   // Bumped when a staff or branch change could move the setup checklist.
   const [setupKey, setSetupKey] = React.useState(0);
+  const [tab, setTab] = React.useState("setup");
   const unsaved = Object.keys(featDraft).length;
 
   // Warn before leaving with unsaved feature changes: closing or reloading
@@ -729,8 +913,10 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     return () => { live = false; };
   }, [id]);
 
-  const back = h("a", { className: "linkBtn backLink", href: "#/" }, "Back to companies");
-  if (loaded === undefined) return h(React.Fragment, null, back, h("p", { className: "muted" }, "Loading…"));
+  const back = h("nav", { className: "crumbs", "aria-label": "Breadcrumb" },
+    h("a", { href: "#/" }, "Companies"), h(Icon, { name: "chevron", size: 14 }),
+    h("span", { "aria-current": "page" }, loaded && loaded.company ? loaded.company.name : "Company"));
+  if (loaded === undefined) return h(React.Fragment, null, back, h("div", { className: "card" }, h(Skeleton, { lines: 2 })), h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
   if (loaded.error) {
     return h(React.Fragment, null, back,
       h("h1", { className: "pageTitle" }, "Company"),
@@ -762,7 +948,8 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
         // is what was stored, not what was typed.
         setLoaded({ company: r.body.company });
         setDraft(toDraft(r.body.company));
-        setSaveMsg({ ok: true, text: "Saved." });
+        setSaveMsg(null);
+        toast("Details saved.");
         onUpdated(r.body.company);
       })
       .finally(() => setSaving(false));
@@ -811,7 +998,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
           const names = failed.map(({ key }) => (FEATURES.find((f) => f.key === key) || { label: key }).label);
           setFeatErr(`Not saved: ${names.join(", ")}. ${failed[0].r.message}`);
         } else {
-          setFeatMsg(`Saved ${saved.length} ${saved.length === 1 ? "change" : "changes"}.`);
+          toast(`Saved ${saved.length} feature ${saved.length === 1 ? "change" : "changes"}.`);
         }
       })
       .finally(() => setFeatSaving(false));
@@ -829,31 +1016,53 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
           value: draft[f.key], disabled: saving, onChange: edit(f.key),
         }));
 
+  const copyCode = () => {
+    if (!company.joinCode || !navigator.clipboard) return;
+    navigator.clipboard.writeText(company.joinCode).then(() => toast("Join code copied."), () => {});
+  };
+  const contact = [company.contactName, company.contactEmail, company.contactPhone].filter(Boolean).join(" · ");
+  const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["danger", "Danger zone"]];
+
   return h(React.Fragment, null,
     back,
-    h("div", { className: "titleRow" },
-      h("h1", { className: "pageTitle" }, company.name),
-      h(StatusBadge, { status: company.status })),
+    h("div", { className: "card hero" },
+      h(Avatar, { name: company.name, size: "lg" }),
+      h("div", { className: "hero__main" },
+        h("h1", { className: "pageTitle hero__name" }, company.name),
+        h("div", { className: "hero__badges" },
+          h(StatusBadge, { status: company.status }), h(SetupBadge, { company }),
+          company.planTier && h("span", { className: "pill pill--setup" }, company.planTier)),
+        h("div", { className: "muted hero__contact" }, contact || "No contact on record")),
+      h("div", { className: "hero__code" },
+        h("span", { className: "hero__codeLabel" }, "Join code"),
+        h("div", { className: "codeChip" },
+          h("span", null, company.joinCode || "None"),
+          company.joinCode && h("button", { type: "button", className: "iconBtn", "aria-label": "Copy join code", title: "Copy", onClick: copyCode },
+            h(Icon, { name: "copy", size: 15 }))))),
 
-    h("section", { className: "detailSection" },
+    h("div", { className: "tabs", role: "tablist", "aria-label": "Company" },
+      TABS.map(([key, label]) => h("button", {
+        key, type: "button", role: "tab", "aria-selected": tab === key, className: `tab${tab === key ? " tab--on" : ""}${key === "danger" ? " tab--danger" : ""}`,
+        onClick: () => setTab(key),
+      }, label, key === "features" && unsaved > 0 && h("span", { className: "tab__dot", "aria-label": "unsaved changes" })))),
+
+    tab === "details" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Details"),
       h("form", { onSubmit: save, noValidate: true },
         h("div", { className: "detailGrid" }, DETAIL_FIELDS.map(field)),
-        h("div", { className: "detailField" },
-          h("span", { className: "loginLabel" }, "Join code"),
-          h("div", { className: "readOnlyValue" }, company.joinCode || h("span", { className: "muted" }, "None"))),
         h("div", { className: "saveRow" },
           h("button", { type: "submit", className: "primaryBtn", disabled: saving || !dirty },
             saving ? "Saving…" : "Save"),
           !dirty && !saveMsg && h("span", { className: "muted" }, "No changes")),
         saveMsg && h("div", { className: saveMsg.ok ? "successMsg" : "loginError", role: "status" }, saveMsg.text))),
 
-    h(SetupProgress, { key: setupKey, id }),
+    tab === "setup" && h(SetupProgress, { key: setupKey, id }),
 
-    h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1) }),
+    tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1) }),
 
-    h("section", { className: "detailSection" },
+    tab === "features" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
+      h("p", { className: "muted sectionSub" }, "Parts of fleetr this company can use. Flip any, then save them together."),
       FEATURES.map((f) => h(FeatureToggle, {
         key: f.key, feature: f, enabled: shownFeature(f.key), changed: f.key in featDraft,
         pending: featSaving, onToggle: () => toggle(f.key),
@@ -870,7 +1079,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
       featMsg && h("div", { className: "successMsg", role: "status" }, featMsg),
       featErr && h("div", { className: "loginError", role: "alert" }, featErr)),
 
-    h(DeleteCompany, { id, company, onDeleted }));
+    tab === "danger" && h(DeleteCompany, { id, company, onDeleted }));
 }
 
 // ─── Customer texts ───────────────────────────────────────────────────────────
@@ -981,7 +1190,7 @@ function CustomerTextsScreen() {
     return () => { leaveGuard = null; };
   }, [unsaved]);
 
-  if (saved === undefined) return h("p", { className: "muted" }, "Loading…");
+  if (saved === undefined) return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"), h("div", { className: "card" }, h(Skeleton, { lines: 4 })));
   if (saved.error) {
     return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"),
       h("div", { className: "loginError", role: "alert" }, saved.error));
@@ -995,7 +1204,7 @@ function CustomerTextsScreen() {
       if (!r.ok) { setNotes((p) => ({ ...p, [k.kind]: { ok: false, text: textRefusal(r) } })); return; }
       setSaved((p) => ({ ...p, [k.kind]: r.body.body }));
       setDrafts((p) => ({ ...p, [k.kind]: r.body.body }));
-      setNotes((p) => ({ ...p, [k.kind]: { ok: true, text: "Saved. Every company sends this wording from now on." } }));
+      toast(`${k.title} saved. Every company sends this wording from now on.`);
     });
   };
 
@@ -1077,8 +1286,16 @@ function CustomerTextsScreen() {
     }));
 }
 
+// The staff app's dark sidebar on a wide screen, with the highlight behind
+// the current page; on a phone, the website's top bar and its drop-down menu.
+const NAV = [
+  { key: "companies", label: "Companies", href: "#/", icon: "companies" },
+  { key: "texts", label: "Customer texts", href: "#/texts", icon: "texts" },
+];
+
 function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }) {
   const route = useHashRoute();
+  const [menu, setMenu] = React.useState(false);
   const signOut = () => {
     if (!confirmLeave()) return;
     leaveGuard = null;
@@ -1086,23 +1303,48 @@ function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }
     if (window.location.hash) window.location.hash = "";
     onSignOut();
   };
-  return h("div", { className: "page" },
-    h("header", { className: "pageHeader" },
+  React.useEffect(() => { setMenu(false); }, [route.name, route.id]);
+  const current = route.name === "texts" ? "texts" : "companies";
+  const email = (supabase.auth.session() && supabase.auth.session().user && supabase.auth.session().user.email) || "";
+  const navLinks = (cls) => NAV.map((n) => h("a", {
+    key: n.key, href: n.href, className: `${cls}${current === n.key ? ` ${cls}--on` : ""}`, "aria-current": current === n.key ? "page" : undefined,
+  }, h(Icon, { name: n.icon, size: 18 }), h("span", null, n.label)));
+
+  return h("div", { className: "shell" },
+    h("aside", { className: "side" },
+      h("a", { href: "#/", className: "side__brand homeLink" }, h(Wordmark)),
+      h("div", { className: "side__label" }, "Platform"),
+      h("nav", { className: "side__nav" }, navLinks("side__item")),
+      h("div", { className: "side__foot" },
+        h(Avatar, { name: email.split("@")[0].replace(/[._-]+/g, " ") }),
+        h("div", { className: "side__user" },
+          h("div", { className: "side__email", title: email }, email || "Signed in"),
+          h("div", { className: "side__role" }, "Platform admin")),
+        h("button", { type: "button", className: "iconBtn iconBtn--dark", "aria-label": "Sign out", title: "Sign out", onClick: signOut },
+          h(Icon, { name: "signOut", size: 17 })))),
+
+    h("header", { className: "topbar" },
       h("a", { href: "#/", className: "homeLink" }, h(Wordmark)),
-      h("nav", { className: "headerNav" },
-        h("a", { href: "#/", className: `linkBtn${route.name === "texts" ? "" : " navOn"}` }, "Companies"),
-        h("a", { href: "#/texts", className: `linkBtn${route.name === "texts" ? " navOn" : ""}` }, "Customer texts"),
-        h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out"))),
-    h("main", { className: "pageBody" },
-      route.name === "texts" ? h(CustomerTextsScreen) :
-      route.name === "company"
-        ? h(CompanyDetailScreen, { id: route.id, onUpdated, onDeleted: (gone) => {
-            // Nothing is left to save, so leave without asking.
-            leaveGuard = null;
-            onDeleted(gone);
-            window.location.hash = "";
-          } })
-        : h(CompanyListScreen, { companies, onCreated })));
+      h("button", { type: "button", className: "menuBtn", "aria-expanded": menu, onClick: () => setMenu((m) => !m) },
+        h(Icon, { name: menu ? "close" : "menu", size: 16 }), "Menu"),
+      h("div", { className: `sheet${menu ? " sheet--open" : ""}` },
+        navLinks("sheet__item"),
+        h("hr", null),
+        h("button", { type: "button", className: "sheet__item sheet__signOut", onClick: signOut }, h(Icon, { name: "signOut", size: 18 }), h("span", null, "Sign out")))),
+
+    h("main", { className: "main" },
+      h("div", { className: "main__inner" },
+        route.name === "texts" ? h(CustomerTextsScreen) :
+        route.name === "company"
+          ? h(CompanyDetailScreen, { key: route.id, id: route.id, onUpdated, onDeleted: (gone) => {
+              // Nothing is left to save, so leave without asking.
+              leaveGuard = null;
+              onDeleted(gone);
+              toast("The company was deleted.");
+              window.location.hash = "";
+            } })
+          : h(CompanyListScreen, { companies, onCreated }))),
+    h(Toaster));
 }
 
 function App() {
@@ -1147,9 +1389,6 @@ function App() {
 // app. Terracotta carries dark ink text, never white, which is not readable on
 // it; text in terracotta uses the deeper --terracotta-text.
 const css = `
-.headerNav{display:flex;align-items:center;gap:18px}
-.headerNav a{text-decoration:none}
-.navOn{color:var(--terracotta-text)}
 .textsIntro{line-height:1.5;margin:0 0 8px}
 .textWhen{margin:-4px 0 10px;font-size:0.9rem}
 .textInserts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
@@ -1297,6 +1536,221 @@ select.loginInput{appearance:auto}
 .deleteTitle{font-weight:600;margin:0 0 8px}
 .deleteList{margin:0 0 16px;padding-left:20px}
 .deleteList li{margin:2px 0}
+
+/* ── The look: the staff app's shell, the website's buttons and cards ─────── */
+:root{--ink:#1F1E1D;--ink-06:#F1F0EC;--shadow:0 1px 2px rgba(31,30,29,0.05),0 8px 24px rgba(31,30,29,0.07);
+  --shadow-lg:0 2px 4px rgba(31,30,29,0.06),0 18px 48px rgba(31,30,29,0.16)}
+.small{font-size:0.8rem}
+.shell{min-height:100%;display:flex}
+.main{flex:1;min-width:0}
+.main__inner{max-width:1080px;margin:0 auto;padding:32px 32px 64px}
+
+/* Sidebar, as the staff app's: dark, terracotta tint on the current page. */
+.side{position:sticky;top:0;height:100vh;width:236px;flex:none;display:flex;flex-direction:column;
+  background:#1F1E1D;color:#F9F9F7;padding:20px 14px}
+.side__brand{padding:4px 10px 22px}
+.side .wordmark{color:#F9F9F7;font-size:1.6rem}
+.side .wordmarkHq{color:rgba(249,249,247,0.55)}
+.side__label{font-size:0.68rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(249,249,247,0.45);padding:0 10px 8px}
+.side__nav{display:flex;flex-direction:column;gap:2px}
+.side__item{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;color:rgba(249,249,247,0.78);
+  text-decoration:none;font-weight:500;font-size:0.92rem;border-left:3px solid transparent;transition:background .15s,color .15s}
+.side__item:hover{background:rgba(249,249,247,0.07);color:#F9F9F7}
+.side__item--on{background:rgba(244,132,95,0.22);border-left-color:#F4845F;color:#F9F9F7}
+.side__foot{margin-top:auto;display:flex;align-items:center;gap:10px;padding:12px 8px 2px;border-top:1px solid rgba(249,249,247,0.1)}
+.side__foot .avatar{background:rgba(244,132,95,0.25);color:#F9F9F7}
+.side__user{min-width:0;flex:1}
+.side__email{font-size:0.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side__role{font-size:0.72rem;color:rgba(249,249,247,0.5)}
+
+/* Phone: the website's top bar, with a drop-down sheet. */
+.topbar{display:none}
+@media (max-width:899px){
+  .shell{flex-direction:column}
+  .side{display:none}
+  .topbar{display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;height:60px;padding:0 16px;
+    background:rgba(249,249,247,0.8);-webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}
+  .topbar .wordmark{font-size:1.4rem}
+  .main__inner{padding:20px 16px 48px}
+}
+.menuBtn{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 14px;border:1px solid var(--border);border-radius:999px;
+  background:var(--bg);font:inherit;font-size:0.88rem;font-weight:600;color:var(--text);cursor:pointer}
+.sheet{position:absolute;top:calc(100% + 6px);left:12px;right:12px;padding:8px;background:var(--bg);border:1px solid var(--border);
+  border-radius:20px;box-shadow:var(--shadow-lg);opacity:0;visibility:hidden;transform:translateY(-8px);transition:opacity .25s,transform .25s,visibility .25s}
+.sheet--open{opacity:1;visibility:visible;transform:none}
+.sheet__item{display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;border-radius:14px;text-decoration:none;color:var(--text);
+  font:inherit;font-size:1rem;font-weight:500;background:none;border:0;cursor:pointer;text-align:left}
+.sheet__item:hover,.sheet__item--on{background:var(--ink-06)}
+.sheet hr{border:0;border-top:1px solid var(--border);margin:6px 8px}
+
+/* Page heads */
+.titleRow{align-items:flex-end;margin-bottom:22px}
+.pageTitle{font-size:1.6rem;font-weight:700;letter-spacing:-0.02em}
+.pageSub{margin:4px 0 0;font-size:0.92rem}
+.crumbs{display:flex;align-items:center;gap:6px;font-size:0.88rem;color:var(--muted);margin-bottom:14px}
+.crumbs a{color:var(--muted);text-decoration:none}
+.crumbs a:hover{color:var(--terracotta-text)}
+.crumbs span[aria-current]{color:var(--text);font-weight:500}
+
+/* Cards: every section sits on one. */
+.card,.detailSection{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);padding:22px 24px;margin-bottom:16px}
+.detailSection:first-of-type{padding-top:22px;border-top:1px solid var(--border)}
+.sectionTitle{font-size:0.78rem;margin-bottom:6px}
+.sectionSub{margin:0 0 14px;font-size:0.9rem}
+
+/* Buttons: the website's tactile primary with its shine, and an outline one. */
+.primaryBtn,.secondaryBtn{position:relative;overflow:hidden;isolation:isolate;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  border-radius:12px;padding:10px 18px;font:inherit;font-weight:600;font-size:0.92rem;cursor:pointer;white-space:nowrap;transition:transform .15s,box-shadow .15s,background .15s,border-color .15s}
+.primaryBtn{border:0;background:var(--terracotta);color:var(--text);box-shadow:inset 0 -3px 0 rgba(31,30,29,0.16),0 1px 2px rgba(31,30,29,0.12)}
+.primaryBtn:hover:not(:disabled){background:var(--terracotta-hover);transform:translateY(-1px);box-shadow:inset 0 -3px 0 rgba(31,30,29,0.16),0 6px 14px rgba(31,30,29,0.14)}
+.primaryBtn:active:not(:disabled){transform:translateY(1px);box-shadow:inset 0 -1px 0 rgba(31,30,29,0.16)}
+.primaryBtn::after{content:"";position:absolute;inset:0;pointer-events:none;transform:translateX(-110%);
+  background:linear-gradient(110deg,transparent 35%,rgba(249,249,247,0.5) 50%,transparent 65%)}
+@media (hover:hover){.primaryBtn:hover:not(:disabled)::after{transform:translateX(110%);transition:transform .7s ease}}
+.primaryBtn:disabled{background:var(--ink-06);color:var(--muted);box-shadow:none;opacity:1}
+.secondaryBtn{border:1px solid var(--border);background:var(--card);color:var(--text)}
+.secondaryBtn:hover:not(:disabled){border-color:rgba(31,30,29,0.3);background:var(--ink-06)}
+.secondaryBtn:disabled{opacity:0.5;cursor:default}
+.iconBtn{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:9px;border:0;background:none;color:var(--muted);cursor:pointer}
+.iconBtn:hover:not(:disabled){background:var(--ink-06);color:var(--text)}
+.iconBtn--dark{color:rgba(249,249,247,0.6)}
+.iconBtn--dark:hover:not(:disabled){background:rgba(249,249,247,0.1);color:#F9F9F7}
+
+/* The website's motion button: the ink circle grows across on hover. */
+.motionBtn{position:relative;isolation:isolate;overflow:hidden;display:inline-flex;align-items:center;gap:12px;padding:5px 22px 5px 5px;
+  border:0;border-radius:999px;background:var(--terracotta);color:var(--text);font:inherit;font-weight:600;font-size:0.92rem;cursor:pointer;transition:color .3s}
+.motionBtn__fill{position:absolute;z-index:-1;left:5px;top:5px;bottom:5px;width:36px;border-radius:999px;background:var(--ink);transition:width .45s cubic-bezier(.22,1,.36,1)}
+.motionBtn__icon{width:36px;height:36px;display:grid;place-items:center;color:#F9F9F7;flex:none}
+@media (hover:hover){.motionBtn:hover{color:#F9F9F7}.motionBtn:hover .motionBtn__fill{width:calc(100% - 10px)}}
+.motionBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+
+/* Stat tiles, as the staff app's Home: click one to filter by it. */
+.statRow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+@media (max-width:720px){.statRow{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.statTile{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px 18px;text-align:left;font:inherit;color:var(--text);cursor:pointer;
+  background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);transition:transform .15s,border-color .15s,box-shadow .15s}
+.statTile:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.statTile--on{border-color:var(--terracotta);box-shadow:0 0 0 3px var(--terracotta-soft),var(--shadow)}
+.statTile__value{font-size:1.9rem;font-weight:700;letter-spacing:-0.02em;line-height:1.1;font-variant-numeric:tabular-nums}
+.statTile__label{font-size:0.85rem;color:var(--muted);font-weight:500}
+
+/* The list: search, the website's chip group, then the table. */
+.listCard{padding:0;overflow:hidden}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border)}
+.searchBox{display:flex;align-items:center;gap:8px;flex:1;min-width:200px;max-width:340px;height:40px;padding:0 12px;border:1px solid var(--border);
+  border-radius:10px;background:var(--bg);color:var(--muted);transition:border-color .15s,box-shadow .15s}
+.searchBox:focus-within{border-color:var(--terracotta);box-shadow:0 0 0 3px var(--terracotta-soft)}
+.searchBox input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:0.92rem;color:var(--text)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid var(--border);border-radius:999px;background:var(--card);
+  font:inherit;font-size:0.85rem;font-weight:500;color:var(--text);cursor:pointer;transition:border-color .15s,background .15s,transform .15s}
+.chip:hover{border-color:var(--text);transform:translateY(-1px)}
+.chip--on{background:var(--terracotta);border-color:var(--terracotta)}
+.chip__count{min-width:20px;padding:0 6px;border-radius:999px;background:var(--ink-06);font-size:0.75rem;font-weight:600;text-align:center}
+.chip--on .chip__count{background:rgba(31,30,29,0.12)}
+.listCard .companyTable th{padding:12px 16px;background:#FCFCFB}
+.listCard .companyTable td{padding:12px 16px}
+.listCard .companyTable th:first-child,.listCard .companyTable td:first-child{padding-left:18px}
+.companyTable tbody tr:last-child td{border-bottom:0}
+.rowLink{cursor:pointer}
+.rowChevron{color:var(--muted);width:32px;text-align:right}
+.rowLink:hover .rowChevron{color:var(--terracotta-text)}
+.sortBtn{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer}
+.nameCell{display:flex;align-items:center;gap:12px}
+.avatar{display:inline-grid;place-items:center;flex:none;width:34px;height:34px;border-radius:50%;background:var(--terracotta-soft);
+  color:var(--terracotta-text);font-size:0.78rem;font-weight:700;letter-spacing:0.02em}
+.avatar--lg{width:56px;height:56px;font-size:1.15rem}
+.emptyState{padding:48px 24px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px}
+.emptyState__icon{width:48px;height:48px;display:grid;place-items:center;border-radius:50%;background:var(--ink-06);color:var(--muted);margin-bottom:6px}
+.emptyState__title{font-weight:600;margin:0 0 6px}
+
+/* Pills: status with a dot, setup state plain. */
+.badge{display:inline-flex;align-items:center;gap:6px;border:0;padding:3px 10px;font-size:0.78rem;font-weight:600}
+.badge__dot{width:7px;height:7px;border-radius:50%;background:currentColor;opacity:0.8}
+.badge-trial{background:var(--ink-06);color:#5C5B57}
+.badge-active{background:rgba(107,203,119,0.16);color:#2E7D3A}
+.badge-suspended{background:var(--terracotta-soft);color:var(--terracotta-text)}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:0.78rem;font-weight:600;background:var(--ink-06);color:#5C5B57}
+.pill--live{background:rgba(107,203,119,0.16);color:#2E7D3A}
+.pill--paused{background:var(--terracotta-soft);color:var(--terracotta-text)}
+
+/* Company header and tabs */
+.hero{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.hero__main{flex:1;min-width:200px}
+.hero__name{margin:0 0 8px}
+.hero__badges{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.hero__contact{font-size:0.88rem}
+.hero__code{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.hero__codeLabel{font-size:0.72rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted)}
+.codeChip{display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px;border:1px dashed rgba(31,30,29,0.25);border-radius:10px;
+  font-weight:700;letter-spacing:0.14em;background:var(--bg)}
+.tabs{display:flex;gap:2px;overflow-x:auto;padding:4px;margin:0 0 16px;background:var(--card);border:1px solid var(--border);border-radius:999px;width:max-content;max-width:100%}
+.tab{position:relative;display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:0;border-radius:999px;background:none;
+  font:inherit;font-size:0.88rem;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap;transition:background .2s,color .2s}
+.tab:hover{color:var(--text)}
+.tab--on{background:var(--terracotta);color:var(--text)}
+.tab--danger.tab--on{background:var(--text);color:var(--bg)}
+.tab__dot{width:7px;height:7px;border-radius:50%;background:var(--terracotta-text)}
+.tab--on .tab__dot{background:var(--text)}
+
+/* Setup: a progress bar, then the website's timeline. */
+.progress{margin:8px 0 14px}
+.progress__top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.progress__count{font-weight:600}
+.progress__pct{font-size:1.4rem;font-weight:700;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.progress__bar{height:8px;border-radius:999px;background:var(--ink-06);overflow:hidden}
+.progress__bar span{display:block;height:100%;border-radius:inherit;background:var(--terracotta);transition:width .6s cubic-bezier(.22,1,.36,1)}
+.setupWhere{margin:0 0 6px;color:var(--muted);font-size:0.92rem}
+.setupHeading{font-size:0.78rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);margin:20px 0 4px}
+.steps{list-style:none;margin:0;padding:0}
+.step{position:relative;display:grid;grid-template-columns:28px minmax(0,1fr);gap:14px;padding:10px 0}
+.step:not(:last-child)::before{content:"";position:absolute;left:13.5px;top:40px;bottom:-10px;width:1px;background:var(--border)}
+.step__node{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--card);box-shadow:inset 0 0 0 1.5px rgba(31,30,29,0.22)}
+.step--done .step__node{background:var(--terracotta);color:var(--text);box-shadow:none}
+.step--skipped .step__node{background:var(--ink-06);color:var(--muted);box-shadow:none}
+.step__title{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;font-weight:500;padding-top:3px}
+.step__state{font-size:0.75rem;font-weight:600;color:var(--muted)}
+.step--done .step__state{color:#2E7D3A}
+.step__why{font-size:0.88rem;margin-top:2px}
+
+/* Inputs, as the staff app's boxes. */
+.loginInput{border-radius:10px;border-color:rgba(31,30,29,0.14);box-shadow:0 1px 2px rgba(31,30,29,0.04);transition:border-color .15s,box-shadow .15s}
+.loginInput:hover:not(:disabled){border-color:rgba(31,30,29,0.28)}
+.loginInput:focus{outline:none;border-color:var(--terracotta);box-shadow:0 0 0 3px var(--terracotta-soft)}
+
+/* Dialog */
+.dialogBackdrop{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;background:rgba(31,30,29,0.32);animation:fadeIn .15s ease}
+.dialog{width:100%;max-width:440px;display:flex;flex-direction:column;padding:22px 24px;background:var(--card);border-radius:18px;box-shadow:var(--shadow-lg);animation:popIn .2s cubic-bezier(.22,1,.36,1)}
+.dialog__head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.dialog__title{font-size:1.15rem;margin:0}
+.dialog__sub{margin:0 0 18px;font-size:0.9rem;line-height:1.5}
+.dialog__actions{display:flex;justify-content:flex-end;gap:10px}
+@keyframes fadeIn{from{opacity:0}}
+@keyframes popIn{from{opacity:0;transform:translateY(8px) scale(0.98)}}
+
+/* Toasts */
+.toaster{position:fixed;right:20px;bottom:20px;z-index:200;display:flex;flex-direction:column;gap:8px;max-width:min(380px,calc(100vw - 32px))}
+.toast{display:flex;align-items:center;gap:10px;padding:12px 12px 12px 14px;background:var(--ink);color:#F9F9F7;border-radius:12px;
+  box-shadow:var(--shadow-lg);font-size:0.9rem;animation:popIn .25s cubic-bezier(.22,1,.36,1)}
+.toast__icon{width:22px;height:22px;flex:none;display:grid;place-items:center;border-radius:50%;background:var(--terracotta);color:var(--ink)}
+.toast__text{flex:1}
+.toast__close{border:0;background:none;color:rgba(249,249,247,0.6);cursor:pointer;display:grid;place-items:center;padding:4px;border-radius:6px}
+.toast__close:hover{color:#F9F9F7;background:rgba(249,249,247,0.1)}
+
+/* Skeleton: the website's sheen. */
+.skel{display:flex;flex-direction:column;gap:12px}
+.sk{position:relative;overflow:hidden;background:var(--ink-06);border-radius:8px}
+.sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(249,249,247,0.8),transparent);animation:shimmer 1.4s ease-in-out infinite}
+.sk--title{height:22px;width:40%}
+.sk--row{height:44px;border-radius:10px}
+@keyframes shimmer{to{transform:translateX(100%)}}
+
+/* Customer texts: the preview as a message bubble on a phone-coloured strip. */
+.textPreview{background:#E9E9EB;border:0;border-radius:18px 18px 18px 6px;color:var(--text)}
+@media (prefers-reduced-motion:reduce){
+  .sk::after,.toast,.dialog,.dialogBackdrop{animation:none}
+  .motionBtn__fill,.progress__bar span{transition:none}
+}
 `;
 const style = document.createElement("style");
 style.textContent = css;
