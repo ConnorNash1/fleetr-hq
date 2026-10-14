@@ -899,8 +899,9 @@ const TEXT_PART = {
 const TEXT_KINDS = [
   { kind: "confirmation", title: "Reservation confirmation", when: "Sent when a reservation is made.",
     parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel] },
+  // The pre-rental never carried the code: it is only where it is placed.
   { kind: "pre_rental", title: "Pre-rental", when: "Sent the day before pickup.",
-    parts: [TEXT_PART.app, TEXT_PART.cancel] },
+    parts: [{ ...TEXT_PART.code, tail: "" }, TEXT_PART.app, TEXT_PART.cancel] },
   { kind: "no_show_2hr", title: "No-show, after 2 hours", when: "Sent 2 hours after the pickup time when the customer has not arrived. [time] is the pickup time.",
     parts: [TEXT_PART.change] },
   { kind: "no_show_24hr", title: "No-show, the next day", when: "Sent a day after the 2 hour text, if the customer still has not arrived.",
@@ -1025,7 +1026,7 @@ function CustomerTextsScreen() {
       const allowed = [...TEXT_PLACEHOLDERS.map(([, p]) => p), ...k.parts.map((p) => p.placeholder)];
       const unknown = (trimmed.match(/\[[^\][]*\]/g) || []).filter((ph) => !allowed.includes(ph.toLowerCase()));
       const repeated = k.parts.filter((p) => (trimmed.toLowerCase().split(p.placeholder).length - 1) > 1).map((p) => p.placeholder);
-      const addsList = [k.fuel && "the fuel note", ...k.parts.filter((p) => placed.tail.includes(p.tail)).map((p) => `the ${p.label.toLowerCase()}`)].filter(Boolean);
+      const addsList = [k.fuel && "the fuel note", ...k.parts.filter((p) => p.tail && placed.tail.includes(p.tail)).map((p) => `the ${p.label.toLowerCase()}`)].filter(Boolean);
       const addsWords = addsList.length > 1 ? [`${addsList.slice(0, -1).join(", ")} and ${addsList[addsList.length - 1]}`] : addsList;
       const note = notes[k.kind];
       return h("section", { key: k.kind, className: "detailSection" },
