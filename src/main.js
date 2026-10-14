@@ -1111,10 +1111,11 @@ const TEXT_PART = {
 const TEXT_RETURN_PLACEHOLDERS = [["Return date", "[return date]"], ["Return time", "[return time]"]];
 const TEXT_KINDS = [
   { kind: "confirmation", title: "Reservation confirmation", when: "Sent when a reservation is made.",
-    parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel] },
+    parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel, { ...TEXT_PART.extend, tail: "" }] },
   // The pre-rental never carried the code: it is only where it is placed.
+  // The extend link is only where it is placed in both.
   { kind: "pre_rental", title: "Pre-rental", when: "Sent the day before pickup.",
-    parts: [{ ...TEXT_PART.code, tail: "" }, TEXT_PART.app, TEXT_PART.cancel] },
+    parts: [{ ...TEXT_PART.code, tail: "" }, TEXT_PART.app, TEXT_PART.cancel, { ...TEXT_PART.extend, tail: "" }] },
   { kind: "no_show_2hr", title: "No-show, after 2 hours", when: "Sent 2 hours after the pickup time when the customer has not arrived. [time] is the pickup time.",
     parts: [TEXT_PART.change] },
   { kind: "no_show_24hr", title: "No-show, the next day", when: "Sent a day after the 2 hour text, if the customer still has not arrived.",
