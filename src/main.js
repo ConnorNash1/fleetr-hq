@@ -229,6 +229,7 @@ function useHashRoute() {
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
+  if (hash === "#/texts") return { name: "texts" };
   const m = hash.match(/^#\/company\/([^/?#]+)$/);
   return m ? { name: "company", id: decodeURIComponent(m[1]) } : { name: "list" };
 }
@@ -338,7 +339,7 @@ async function adminRequest(path, { method = "GET", body } = {}) {
   const json = await res.json().catch(() => null);
   if (res.ok && json && json.ok) return { ok: true, body: json };
   console.warn(`fleetr hq ${method} ${path} refused:`, res.status);
-  return { ok: false, message: (json && json.message) || `The request failed (${res.status}).` };
+  return { ok: false, message: (json && json.message) || `The request failed (${res.status}).`, reason: json && json.reason, refusal: json };
 }
 
 // Hardcoded until there is a feature catalogue. A key with no company_features
@@ -872,6 +873,173 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     h(DeleteCompany, { id, company, onDeleted }));
 }
 
+// ─── Customer texts ───────────────────────────────────────────────────────────
+// fleetr's five customer texts, the same for every company
+// (fleetr_message_templates). Each shows with sample values filled in, the
+// parts the texting Worker adds after the wording, and its footer, then its
+// length and how many message parts it is sent as. The preview mirrors
+// worker.js (fleetr-infra): fillTemplate, codeSuffix, appSuffix,
+// cancelSuffix, rescheduleSuffix, footerLine, isGsm7 and gsm7Length. If the
+// Worker's copy changes, change this one. The tokens are stand-ins of the real
+// length, so the count is the real count.
+const TEXT_SAMPLE = {
+  "[first name]": "Alex", "[company]": "Avalon Rentals", "[location]": "40 Harbour Dr",
+  "[date]": "Oct 6", "[time]": "10:00 AM",
+};
+const TEXT_LINK = (label, mark) => ` ${label} https://app.fleetr.ai/#${mark}=XXXXXXXXXXXXXXXXXXXXXX`;
+const TEXT_KINDS = [
+  { kind: "confirmation", title: "Reservation confirmation", when: "Sent when a reservation is made.",
+    suffix: " Reservation code: ABC 123 456." + TEXT_LINK("App:", "a") + TEXT_LINK("Cancel:", "c"),
+    adds: "the reservation code, the app link and the cancel link" },
+  { kind: "pre_rental", title: "Pre-rental", when: "Sent the day before pickup.",
+    suffix: TEXT_LINK("App:", "a") + TEXT_LINK("Cancel:", "c"), adds: "the app link and the cancel link" },
+  { kind: "no_show_2hr", title: "No-show, after 2 hours", when: "Sent 2 hours after the pickup time when the customer has not arrived. [time] is the pickup time.",
+    suffix: TEXT_LINK("Change pickup time:", "r"), adds: "the change pickup time link" },
+  { kind: "no_show_24hr", title: "No-show, the next day", when: "Sent a day after the 2 hour text, if the customer still has not arrived.",
+    suffix: TEXT_LINK("Change pickup time:", "r"), adds: "the change pickup time link" },
+  { kind: "return_reminder", title: "Return reminder", when: "Sent the day before a rental is due back. [date] and [time] are when it is due back.",
+    suffix: " Return fuel at Full to avoid a charge." + TEXT_LINK("When you return, open the app to check the vehicle in:", "a"),
+    adds: "the fuel note, when the fuel level at pickup is known, and the app link" },
+];
+const TEXT_PLACEHOLDERS = [["First name", "[first name]"], ["Company", "[company]"], ["Location", "[location]"], ["Date", "[date]"], ["Time", "[time]"]];
+const TEXT_MAX = 240;
+const textFooter = (company) => `\nFrom ${company} via fleetr. Reply STOP to opt out.`;
+const fillText = (body) => String(body).replace(/\[(first name|company|location|date|time)\]/gi, (m) => TEXT_SAMPLE[m.toLowerCase()]);
+const TEXT_GSM7 = new Set(
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
+  + "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+  + "\f^{}\\[~]|€");
+const TEXT_GSM7_DOUBLE = new Set("^{}\\[~]|€");
+// Its length as the carrier counts it, and how many message parts that is.
+function measureText(text) {
+  const chars = [...String(text)];
+  const costly = [...new Set(chars.filter((ch) => !TEXT_GSM7.has(ch)))];
+  if (!costly.length) {
+    const length = chars.reduce((n, ch) => n + (TEXT_GSM7_DOUBLE.has(ch) ? 2 : 1), 0);
+    return { length, parts: length <= 160 ? 1 : Math.ceil(length / 153), perPart: 160, costly };
+  }
+  const length = String(text).length;
+  return { length, parts: length <= 70 ? 1 : Math.ceil(length / 67), perPart: 70, costly };
+}
+const TEXT_REFUSALS = {
+  empty: "A text cannot be empty: every company sends it.",
+  too_long: `Keep the wording to ${TEXT_MAX} characters.`,
+  no_links: "Links are not allowed in the wording. The texting system adds its own.",
+  bad_kind: "That text does not exist.",
+};
+const textRefusal = (r) => (r.reason === "bad_placeholder"
+  ? (r.refusal && r.refusal.placeholder ? `${r.refusal.placeholder} is not a placeholder.` : "There is a stray square bracket.")
+    + ` Use only ${TEXT_PLACEHOLDERS.map(([, p]) => p).join(", ")}.`
+  : TEXT_REFUSALS[r.reason] || r.message);
+
+function CustomerTextsScreen() {
+  const [saved, setSaved] = React.useState(undefined);   // kind -> wording, or { error }
+  const [drafts, setDrafts] = React.useState({});
+  const [busy, setBusy] = React.useState("");
+  const [notes, setNotes] = React.useState({});
+  const boxes = React.useRef({});
+
+  React.useEffect(() => {
+    let live = true;
+    adminRequest("/admin/texts").then((r) => {
+      if (!live) return;
+      if (!r.ok) { setSaved({ error: r.message }); return; }
+      const byKind = Object.fromEntries((r.body.texts || []).map((t) => [t.kind, t.body]));
+      setSaved(byKind);
+      setDrafts(byKind);
+    });
+    return () => { live = false; };
+  }, []);
+
+  const unsaved = saved && !saved.error ? TEXT_KINDS.filter((k) => (drafts[k.kind] ?? "") !== (saved[k.kind] ?? "")).length : 0;
+  React.useEffect(() => {
+    leaveGuard = () => (unsaved ? `${unsaved} customer ${unsaved === 1 ? "text has" : "texts have"} unsaved changes. Leave anyway?` : null);
+    return () => { leaveGuard = null; };
+  }, [unsaved]);
+
+  if (saved === undefined) return h("p", { className: "muted" }, "Loading…");
+  if (saved.error) {
+    return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"),
+      h("div", { className: "loginError", role: "alert" }, saved.error));
+  }
+
+  const save = (k) => {
+    setBusy(k.kind);
+    setNotes((p) => ({ ...p, [k.kind]: null }));
+    adminRequest(`/admin/texts/${k.kind}`, { method: "PUT", body: { body: drafts[k.kind] ?? "" } }).then((r) => {
+      setBusy("");
+      if (!r.ok) { setNotes((p) => ({ ...p, [k.kind]: { ok: false, text: textRefusal(r) } })); return; }
+      setSaved((p) => ({ ...p, [k.kind]: r.body.body }));
+      setDrafts((p) => ({ ...p, [k.kind]: r.body.body }));
+      setNotes((p) => ({ ...p, [k.kind]: { ok: true, text: "Saved. Every company sends this wording from now on." } }));
+    });
+  };
+
+  // Puts a placeholder where the cursor is, and leaves the cursor after it.
+  const insert = (kind, ph) => {
+    const box = boxes.current[kind];
+    const value = drafts[kind] ?? "";
+    const start = box ? box.selectionStart : value.length, end = box ? box.selectionEnd : value.length;
+    setDrafts((p) => ({ ...p, [kind]: value.slice(0, start) + ph + value.slice(end) }));
+    setTimeout(() => { const b = boxes.current[kind]; if (b) { b.focus(); b.setSelectionRange(start + ph.length, start + ph.length); } }, 0);
+  };
+
+  return h(React.Fragment, null,
+    h("h1", { className: "pageTitle" }, "Customer texts"),
+    h("p", { className: "muted textsIntro" },
+      "The texts every company's customers receive. The placeholders fill in for each company, branch and customer: ",
+      h("strong", null, TEXT_PLACEHOLDERS.map(([, p]) => p).join(", ")),
+      ". The texting system adds the links and the footer after the wording; they cannot be edited here. The previews use a made-up customer at a made-up company."),
+    TEXT_KINDS.map((k) => {
+      const draft = drafts[k.kind] ?? "";
+      const trimmed = draft.trim();
+      const changed = draft !== (saved[k.kind] ?? "");
+      const footer = textFooter(TEXT_SAMPLE["[company]"]);
+      const full = fillText(trimmed) + k.suffix + footer;
+      const m = measureText(full);
+      const unknown = (trimmed.match(/\[[^\][]*\]/g) || []).filter((ph) => !TEXT_PLACEHOLDERS.some(([, p]) => p === ph.toLowerCase()));
+      const note = notes[k.kind];
+      return h("section", { key: k.kind, className: "detailSection" },
+        h("h2", { className: "sectionTitle" }, k.title),
+        h("p", { className: "muted textWhen" }, k.when),
+        h("div", { className: "textInserts" },
+          TEXT_PLACEHOLDERS.map(([label, ph]) => h("button", {
+            key: ph, type: "button", className: "chipBtn",
+            onMouseDown: (e) => e.preventDefault(), onClick: () => insert(k.kind, ph),
+          }, `+ ${label}`))),
+        h("textarea", {
+          className: "loginInput textBox", rows: 3, value: draft, "aria-label": `${k.title} wording`,
+          ref: (n) => { boxes.current[k.kind] = n; },
+          onChange: (e) => { setDrafts((p) => ({ ...p, [k.kind]: e.target.value })); setNotes((p) => ({ ...p, [k.kind]: null })); },
+        }),
+        h("div", { className: "muted textCount" }, `${trimmed.length} of ${TEXT_MAX} characters of wording`),
+        h("div", { className: "textPreviewLabel" }, "What a customer receives"),
+        h("div", { className: "textPreview" },
+          h("span", null, fillText(trimmed)),
+          h("span", { className: "textAdded" }, k.suffix),
+          h("span", { className: "textAdded" }, footer)),
+        h("div", { className: "textMeasure" },
+          h("span", { className: `textChip${m.parts > 1 ? " textChip--warn" : ""}` }, `${m.parts} message part${m.parts === 1 ? "" : "s"}`),
+          h("span", { className: "muted" }, `${m.length} characters, counting ${k.adds}, plus the footer. ${m.perPart} fit in one part; a longer company name, branch or customer name adds to this.`)),
+        m.parts > 1 && h("div", { className: "loginError" }, `This is sent as ${m.parts} message parts, and each part is billed as a text. Shorten the wording to bring it back to one.`),
+        m.costly.length > 0 && h("div", { className: "loginError" },
+          `These characters make each part hold 70 characters instead of 160: ${m.costly.map((ch) => (ch === "\n" ? "line break" : ch)).join("  ")}. Curly quotes are saved as straight ones.`),
+        trimmed.length > TEXT_MAX && h("div", { className: "loginError" }, `${trimmed.length - TEXT_MAX} characters over the ${TEXT_MAX} allowed.`),
+        unknown.length > 0 && h("div", { className: "loginError" }, `${unknown.join(", ")} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}.`),
+        h("div", { className: "saveRow", style: { marginTop: "12px" } },
+          h("button", {
+            type: "button", className: "primaryBtn",
+            disabled: busy === k.kind || !changed || !trimmed || trimmed.length > TEXT_MAX || unknown.length > 0,
+            onClick: () => save(k),
+          }, busy === k.kind ? "Saving…" : "Save"),
+          changed && h("button", {
+            type: "button", className: "linkBtn", disabled: busy === k.kind,
+            onClick: () => { setDrafts((p) => ({ ...p, [k.kind]: saved[k.kind] ?? "" })); setNotes((p) => ({ ...p, [k.kind]: null })); },
+          }, "Discard")),
+        note && h("div", { className: note.ok ? "successMsg" : "loginError", role: note.ok ? "status" : "alert" }, note.text));
+    }));
+}
+
 function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }) {
   const route = useHashRoute();
   const signOut = () => {
@@ -884,8 +1052,12 @@ function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }
   return h("div", { className: "page" },
     h("header", { className: "pageHeader" },
       h("a", { href: "#/", className: "homeLink" }, h(Wordmark)),
-      h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out")),
+      h("nav", { className: "headerNav" },
+        h("a", { href: "#/", className: `linkBtn${route.name === "texts" ? "" : " navOn"}` }, "Companies"),
+        h("a", { href: "#/texts", className: `linkBtn${route.name === "texts" ? " navOn" : ""}` }, "Customer texts"),
+        h("button", { type: "button", className: "linkBtn", onClick: signOut }, "Sign out"))),
     h("main", { className: "pageBody" },
+      route.name === "texts" ? h(CustomerTextsScreen) :
       route.name === "company"
         ? h(CompanyDetailScreen, { id: route.id, onUpdated, onDeleted: (gone) => {
             // Nothing is left to save, so leave without asking.
@@ -938,6 +1110,24 @@ function App() {
 // app. Terracotta carries dark ink text, never white, which is not readable on
 // it; text in terracotta uses the deeper --terracotta-text.
 const css = `
+.headerNav{display:flex;align-items:center;gap:18px}
+.headerNav a{text-decoration:none}
+.navOn{color:var(--terracotta-text)}
+.textsIntro{line-height:1.5;margin:0 0 8px}
+.textWhen{margin:-4px 0 10px;font-size:0.9rem}
+.textInserts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.chipBtn{font:inherit;font-size:0.8rem;font-weight:500;color:var(--text);background:var(--card);border:1px solid var(--border);
+  border-radius:999px;padding:4px 10px;cursor:pointer}
+.chipBtn:hover{border-color:var(--terracotta);color:var(--terracotta-text)}
+.textBox{display:block;width:100%;box-sizing:border-box;margin-bottom:4px;resize:vertical;line-height:1.45}
+.textCount{font-size:0.8rem;margin-bottom:12px}
+.textPreviewLabel{font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:6px}
+.textPreview{white-space:pre-wrap;word-break:break-word;background:var(--card);border:1px solid var(--border);border-radius:14px 14px 14px 4px;
+  padding:12px 14px;line-height:1.45;font-size:0.92rem;max-width:520px}
+.textAdded{color:var(--muted)}
+.textMeasure{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-top:10px;font-size:0.85rem}
+.textChip{font-weight:600;font-size:0.8rem;padding:2px 10px;border-radius:999px;background:var(--border)}
+.textChip--warn{background:var(--terracotta)}
 .wordmark{font-size:1.75rem;font-weight:700;letter-spacing:-0.02em}
 .wordmarkHq{font-weight:500;color:var(--muted);margin-left:6px}
 .muted{color:var(--muted)}
