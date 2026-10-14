@@ -1083,17 +1083,18 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
 }
 
 // ─── Customer texts ───────────────────────────────────────────────────────────
-// fleetr's five customer texts, the same for every company
+// fleetr's seven customer texts, the same for every company
 // (fleetr_message_templates). Each shows with sample values filled in, the
 // parts the texting Worker adds after the wording, and its footer, then its
 // length and how many message parts it is sent as. The preview mirrors
-// worker.js (fleetr-infra): fillTemplate, codeSuffix, appSuffix,
-// cancelSuffix, rescheduleSuffix, footerLine, isGsm7 and gsm7Length. If the
+// worker.js (fleetr-infra): fillTemplate, fillReturn, codeSuffix, appSuffix,
+// cancelSuffix, rescheduleSuffix, extendSuffix, footerLine, isGsm7 and
+// gsm7Length. If the
 // Worker's copy changes, change this one. The tokens are stand-ins of the real
 // length, so the count is the real count.
 const TEXT_SAMPLE = {
   "[first name]": "Alex", "[company]": "Avalon Rentals", "[location]": "40 Harbour Dr",
-  "[date]": "Oct 6", "[time]": "10:00 AM",
+  "[date]": "Oct 6", "[time]": "10:00 AM", "[return date]": "Oct 9", "[return time]": "2:00 PM",
 };
 const TEXT_URL = (mark) => `https://app.fleetr.ai/#${mark}=XXXXXXXXXXXXXXXXXXXXXX`;
 const TEXT_LINK = (label, mark) => ` ${label} ${TEXT_URL(mark)}`;
@@ -1104,7 +1105,10 @@ const TEXT_PART = {
   app:    { label: "App link", placeholder: "[app link]", sample: TEXT_URL("a"), tail: TEXT_LINK("App:", "a") },
   cancel: { label: "Cancel link", placeholder: "[cancel link]", sample: TEXT_URL("c"), tail: TEXT_LINK("Cancel:", "c") },
   change: { label: "Change pickup link", placeholder: "[change link]", sample: TEXT_URL("r"), tail: TEXT_LINK("Change pickup time:", "r") },
+  extend: { label: "Extend link", placeholder: "[extend link]", sample: TEXT_URL("e"), tail: TEXT_LINK("Need more time? Extend:", "e") },
 };
+// Placeholders only some texts have.
+const TEXT_RETURN_PLACEHOLDERS = [["Return date", "[return date]"], ["Return time", "[return time]"]];
 const TEXT_KINDS = [
   { kind: "confirmation", title: "Reservation confirmation", when: "Sent when a reservation is made.",
     parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel] },
@@ -1117,9 +1121,15 @@ const TEXT_KINDS = [
     parts: [TEXT_PART.change] },
   // The fuel note goes straight after the wording, when the fuel level at
   // pickup is known.
-  { kind: "return_reminder", title: "Return reminder", when: "Sent the day before a rental is due back. [date] and [time] are when it is due back.",
+  { kind: "return_reminder", title: "Return reminder", when: "Sent the day before a rental is due back. [date] and [time] are when it is due back. The extend link opens Extend my rental.",
     fuel: " Return fuel at Full to avoid a charge.",
-    parts: [{ ...TEXT_PART.app, tail: TEXT_LINK("When you return, open the app to check the vehicle in:", "a") }] },
+    parts: [{ ...TEXT_PART.app, tail: TEXT_LINK("When you return, open the app to check the vehicle in:", "a") }, TEXT_PART.extend] },
+  { kind: "rescheduled", title: "Pickup time changed", when: "Sent when a customer changes their own pickup time in the customer app. [date] and [time] are the new pickup, [return date] and [return time] the new return.",
+    extra: TEXT_RETURN_PLACEHOLDERS,
+    parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel] },
+  // The extension never carried the code: it is only where it is placed.
+  { kind: "extended", title: "Rental extended", when: "Sent when a customer extends their own rental in the customer app. [date] and [time] are the new return.",
+    parts: [{ ...TEXT_PART.code, tail: "" }, TEXT_PART.app] },
 ];
 // The wording with its parts in place, and what is added after it.
 function placeTextParts(body, parts) {
@@ -1134,7 +1144,7 @@ function placeTextParts(body, parts) {
 const TEXT_PLACEHOLDERS = [["First name", "[first name]"], ["Company", "[company]"], ["Location", "[location]"], ["Date", "[date]"], ["Time", "[time]"]];
 const TEXT_MAX = 240;
 const textFooter = (company) => `\nFrom ${company} via fleetr. Reply STOP to opt out.`;
-const fillText = (body) => String(body).replace(/\[(first name|company|location|date|time)\]/gi, (m) => TEXT_SAMPLE[m.toLowerCase()]);
+const fillText = (body) => String(body).replace(/\[(first name|company|location|date|time|return date|return time)\]/gi, (m) => TEXT_SAMPLE[m.toLowerCase()]);
 const TEXT_GSM7 = new Set(
   "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
   + "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
@@ -1232,7 +1242,8 @@ function CustomerTextsScreen() {
       const added = (k.fuel || "") + placed.tail;
       const full = fillText(placed.text) + added + footer;
       const m = measureText(full);
-      const allowed = [...TEXT_PLACEHOLDERS.map(([, p]) => p), ...k.parts.map((p) => p.placeholder)];
+      const placeholders = [...TEXT_PLACEHOLDERS, ...(k.extra || [])];
+      const allowed = [...placeholders.map(([, p]) => p), ...k.parts.map((p) => p.placeholder)];
       const unknown = (trimmed.match(/\[[^\][]*\]/g) || []).filter((ph) => !allowed.includes(ph.toLowerCase()));
       const repeated = k.parts.filter((p) => (trimmed.toLowerCase().split(p.placeholder).length - 1) > 1).map((p) => p.placeholder);
       const addsList = [k.fuel && "the fuel note", ...k.parts.filter((p) => p.tail && placed.tail.includes(p.tail)).map((p) => `the ${p.label.toLowerCase()}`)].filter(Boolean);
@@ -1242,7 +1253,7 @@ function CustomerTextsScreen() {
         h("h2", { className: "sectionTitle" }, k.title),
         h("p", { className: "muted textWhen" }, k.when),
         h("div", { className: "textInserts" },
-          TEXT_PLACEHOLDERS.map(([label, ph]) => h("button", {
+          placeholders.map(([label, ph]) => h("button", {
             key: ph, type: "button", className: "chipBtn",
             onMouseDown: (e) => e.preventDefault(), onClick: () => insert(k.kind, ph),
           }, `+ ${label}`)),
