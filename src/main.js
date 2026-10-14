@@ -886,21 +886,41 @@ const TEXT_SAMPLE = {
   "[first name]": "Alex", "[company]": "Avalon Rentals", "[location]": "40 Harbour Dr",
   "[date]": "Oct 6", "[time]": "10:00 AM",
 };
-const TEXT_LINK = (label, mark) => ` ${label} https://app.fleetr.ai/#${mark}=XXXXXXXXXXXXXXXXXXXXXX`;
+const TEXT_URL = (mark) => `https://app.fleetr.ai/#${mark}=XXXXXXXXXXXXXXXXXXXXXX`;
+const TEXT_LINK = (label, mark) => ` ${label} ${TEXT_URL(mark)}`;
+// The parts the system adds, which a text can also place in its wording. A
+// part the wording leaves out is added after it, labelled, as the Worker does.
+const TEXT_PART = {
+  code:   { label: "Reservation code", placeholder: "[reservation code]", sample: "ABC 123 456", tail: " Reservation code: ABC 123 456." },
+  app:    { label: "App link", placeholder: "[app link]", sample: TEXT_URL("a"), tail: TEXT_LINK("App:", "a") },
+  cancel: { label: "Cancel link", placeholder: "[cancel link]", sample: TEXT_URL("c"), tail: TEXT_LINK("Cancel:", "c") },
+  change: { label: "Change pickup link", placeholder: "[change link]", sample: TEXT_URL("r"), tail: TEXT_LINK("Change pickup time:", "r") },
+};
 const TEXT_KINDS = [
   { kind: "confirmation", title: "Reservation confirmation", when: "Sent when a reservation is made.",
-    suffix: " Reservation code: ABC 123 456." + TEXT_LINK("App:", "a") + TEXT_LINK("Cancel:", "c"),
-    adds: "the reservation code, the app link and the cancel link" },
+    parts: [TEXT_PART.code, TEXT_PART.app, TEXT_PART.cancel] },
   { kind: "pre_rental", title: "Pre-rental", when: "Sent the day before pickup.",
-    suffix: TEXT_LINK("App:", "a") + TEXT_LINK("Cancel:", "c"), adds: "the app link and the cancel link" },
+    parts: [TEXT_PART.app, TEXT_PART.cancel] },
   { kind: "no_show_2hr", title: "No-show, after 2 hours", when: "Sent 2 hours after the pickup time when the customer has not arrived. [time] is the pickup time.",
-    suffix: TEXT_LINK("Change pickup time:", "r"), adds: "the change pickup time link" },
+    parts: [TEXT_PART.change] },
   { kind: "no_show_24hr", title: "No-show, the next day", when: "Sent a day after the 2 hour text, if the customer still has not arrived.",
-    suffix: TEXT_LINK("Change pickup time:", "r"), adds: "the change pickup time link" },
+    parts: [TEXT_PART.change] },
+  // The fuel note goes straight after the wording, when the fuel level at
+  // pickup is known.
   { kind: "return_reminder", title: "Return reminder", when: "Sent the day before a rental is due back. [date] and [time] are when it is due back.",
-    suffix: " Return fuel at Full to avoid a charge." + TEXT_LINK("When you return, open the app to check the vehicle in:", "a"),
-    adds: "the fuel note, when the fuel level at pickup is known, and the app link" },
+    fuel: " Return fuel at Full to avoid a charge.",
+    parts: [{ ...TEXT_PART.app, tail: TEXT_LINK("When you return, open the app to check the vehicle in:", "a") }] },
 ];
+// The wording with its parts in place, and what is added after it.
+function placeTextParts(body, parts) {
+  let text = String(body), tail = "";
+  for (const p of parts) {
+    const re = new RegExp(p.placeholder.replace(/[[\]]/g, "\\$&"), "gi");
+    if (re.test(text)) text = text.replace(new RegExp(re.source, "gi"), () => p.sample);
+    else tail += p.tail;
+  }
+  return { text, tail };
+}
 const TEXT_PLACEHOLDERS = [["First name", "[first name]"], ["Company", "[company]"], ["Location", "[location]"], ["Date", "[date]"], ["Time", "[time]"]];
 const TEXT_MAX = 240;
 const textFooter = (company) => `\nFrom ${company} via fleetr. Reply STOP to opt out.`;
@@ -922,12 +942,15 @@ function measureText(text) {
   return { length, parts: length <= 70 ? 1 : Math.ceil(length / 67), perPart: 70, costly };
 }
 const TEXT_REFUSALS = {
+  repeated: "Put each code or link in once.",
   empty: "A text cannot be empty: every company sends it.",
   too_long: `Keep the wording to ${TEXT_MAX} characters.`,
   no_links: "Links are not allowed in the wording. The texting system adds its own.",
   bad_kind: "That text does not exist.",
 };
-const textRefusal = (r) => (r.reason === "bad_placeholder"
+const textRefusal = (r) => (r.reason === "not_in_this_text"
+  ? `${(r.refusal && r.refusal.placeholder) || "That"} is not sent with this text.`
+  : r.reason === "bad_placeholder"
   ? (r.refusal && r.refusal.placeholder ? `${r.refusal.placeholder} is not a placeholder.` : "There is a stray square bracket.")
     + ` Use only ${TEXT_PLACEHOLDERS.map(([, p]) => p).join(", ")}.`
   : TEXT_REFUSALS[r.reason] || r.message);
@@ -989,15 +1012,21 @@ function CustomerTextsScreen() {
     h("p", { className: "muted textsIntro" },
       "The texts every company's customers receive. The placeholders fill in for each company, branch and customer: ",
       h("strong", null, TEXT_PLACEHOLDERS.map(([, p]) => p).join(", ")),
-      ". The texting system adds the links and the footer after the wording; they cannot be edited here. The previews use a made-up customer at a made-up company."),
+      ". Each text's reservation code and links can be placed in the wording too, with the buttons under its name; one left out is added at the end, labelled, so it is never lost. The footer is always added last and cannot be edited. The previews use a made-up customer at a made-up company."),
     TEXT_KINDS.map((k) => {
       const draft = drafts[k.kind] ?? "";
       const trimmed = draft.trim();
       const changed = draft !== (saved[k.kind] ?? "");
       const footer = textFooter(TEXT_SAMPLE["[company]"]);
-      const full = fillText(trimmed) + k.suffix + footer;
+      const placed = placeTextParts(trimmed, k.parts);
+      const added = (k.fuel || "") + placed.tail;
+      const full = fillText(placed.text) + added + footer;
       const m = measureText(full);
-      const unknown = (trimmed.match(/\[[^\][]*\]/g) || []).filter((ph) => !TEXT_PLACEHOLDERS.some(([, p]) => p === ph.toLowerCase()));
+      const allowed = [...TEXT_PLACEHOLDERS.map(([, p]) => p), ...k.parts.map((p) => p.placeholder)];
+      const unknown = (trimmed.match(/\[[^\][]*\]/g) || []).filter((ph) => !allowed.includes(ph.toLowerCase()));
+      const repeated = k.parts.filter((p) => (trimmed.toLowerCase().split(p.placeholder).length - 1) > 1).map((p) => p.placeholder);
+      const addsList = [k.fuel && "the fuel note", ...k.parts.filter((p) => placed.tail.includes(p.tail)).map((p) => `the ${p.label.toLowerCase()}`)].filter(Boolean);
+      const addsWords = addsList.length > 1 ? [`${addsList.slice(0, -1).join(", ")} and ${addsList[addsList.length - 1]}`] : addsList;
       const note = notes[k.kind];
       return h("section", { key: k.kind, className: "detailSection" },
         h("h2", { className: "sectionTitle" }, k.title),
@@ -1006,7 +1035,13 @@ function CustomerTextsScreen() {
           TEXT_PLACEHOLDERS.map(([label, ph]) => h("button", {
             key: ph, type: "button", className: "chipBtn",
             onMouseDown: (e) => e.preventDefault(), onClick: () => insert(k.kind, ph),
-          }, `+ ${label}`))),
+          }, `+ ${label}`)),
+          k.parts.map((p) => h("button", {
+            key: p.placeholder, type: "button", className: "chipBtn chipBtn--part",
+            disabled: trimmed.toLowerCase().includes(p.placeholder),
+            title: trimmed.toLowerCase().includes(p.placeholder) ? "Already in the wording" : `Place the ${p.label.toLowerCase()} here`,
+            onMouseDown: (e) => e.preventDefault(), onClick: () => insert(k.kind, p.placeholder),
+          }, `+ ${p.label}`))),
         h("textarea", {
           className: "loginInput textBox", rows: 3, value: draft, "aria-label": `${k.title} wording`,
           ref: (n) => { boxes.current[k.kind] = n; },
@@ -1015,21 +1050,22 @@ function CustomerTextsScreen() {
         h("div", { className: "muted textCount" }, `${trimmed.length} of ${TEXT_MAX} characters of wording`),
         h("div", { className: "textPreviewLabel" }, "What a customer receives"),
         h("div", { className: "textPreview" },
-          h("span", null, fillText(trimmed)),
-          h("span", { className: "textAdded" }, k.suffix),
+          h("span", null, fillText(placed.text)),
+          h("span", { className: "textAdded" }, added),
           h("span", { className: "textAdded" }, footer)),
         h("div", { className: "textMeasure" },
           h("span", { className: `textChip${m.parts > 1 ? " textChip--warn" : ""}` }, `${m.parts} message part${m.parts === 1 ? "" : "s"}`),
-          h("span", { className: "muted" }, `${m.length} characters, counting ${k.adds}, plus the footer. ${m.perPart} fit in one part; a longer company name, branch or customer name adds to this.`)),
+          h("span", { className: "muted" }, `${m.length} characters${addsWords.length ? `, counting ${addsWords[0]}, added at the end` : ""}, plus the footer. ${m.perPart} fit in one part; a longer company name, branch or customer name adds to this.`)),
         m.parts > 1 && h("div", { className: "loginError" }, `This is sent as ${m.parts} message parts, and each part is billed as a text. Shorten the wording to bring it back to one.`),
         m.costly.length > 0 && h("div", { className: "loginError" },
           `These characters make each part hold 70 characters instead of 160: ${m.costly.map((ch) => (ch === "\n" ? "line break" : ch)).join("  ")}. Curly quotes are saved as straight ones.`),
         trimmed.length > TEXT_MAX && h("div", { className: "loginError" }, `${trimmed.length - TEXT_MAX} characters over the ${TEXT_MAX} allowed.`),
-        unknown.length > 0 && h("div", { className: "loginError" }, `${unknown.join(", ")} ${unknown.length === 1 ? "is not a placeholder" : "are not placeholders"}.`),
+        unknown.length > 0 && h("div", { className: "loginError" }, `${unknown.join(", ")} ${unknown.length === 1 ? "is not a placeholder for this text" : "are not placeholders for this text"}.`),
+        repeated.length > 0 && h("div", { className: "loginError" }, `${repeated.join(", ")} can go in once.`),
         h("div", { className: "saveRow", style: { marginTop: "12px" } },
           h("button", {
             type: "button", className: "primaryBtn",
-            disabled: busy === k.kind || !changed || !trimmed || trimmed.length > TEXT_MAX || unknown.length > 0,
+            disabled: busy === k.kind || !changed || !trimmed || trimmed.length > TEXT_MAX || unknown.length > 0 || repeated.length > 0,
             onClick: () => save(k),
           }, busy === k.kind ? "Saving…" : "Save"),
           changed && h("button", {
@@ -1118,7 +1154,9 @@ const css = `
 .textInserts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .chipBtn{font:inherit;font-size:0.8rem;font-weight:500;color:var(--text);background:var(--card);border:1px solid var(--border);
   border-radius:999px;padding:4px 10px;cursor:pointer}
-.chipBtn:hover{border-color:var(--terracotta);color:var(--terracotta-text)}
+.chipBtn:hover:not(:disabled){border-color:var(--terracotta);color:var(--terracotta-text)}
+.chipBtn--part{background:var(--terracotta-soft, #FDEEE8);border-color:transparent}
+.chipBtn:disabled{opacity:0.45;cursor:default}
 .textBox{display:block;width:100%;box-sizing:border-box;margin-bottom:4px;resize:vertical;line-height:1.45}
 .textCount{font-size:0.8rem;margin-bottom:12px}
 .textPreviewLabel{font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);margin-bottom:6px}
