@@ -570,6 +570,7 @@ function FeatureToggle({ feature, enabled, changed, pending, onToggle }) {
 // still missing.
 const SETUP_ITEMS = {
   branch:                "Branch: address, map pin and sales tax",
+  fuel_rate:             "Post-pay fuel rate",
   vehicle_classes:       "Vehicle classes",
   rates:                 "A daily rate for every vehicle class",
   vehicles:              "A vehicle at the default branch",
@@ -585,6 +586,7 @@ function setupReason(item) {
   if (item.skipped) return "Skipped for now.";
   switch (item.key) {
     case "branch":            return list.length ? `No full address, map pin or confirmed sales tax: ${list.join(", ")}.` : "No open branch.";
+    case "fuel_rate":         return "Not set.";
     case "vehicle_classes":   return "None added.";
     case "rates":             return list.length ? `No rate for: ${list.join(", ")}.` : "No vehicle classes yet.";
     case "vehicles":          return "No vehicle with one of the company's classes at its default branch.";
@@ -779,106 +781,6 @@ function CompanyStaff({ id, company, onChanged }) {
 
   return h("section", { className: "detailSection" },
     h("h2", { className: "sectionTitle" }, "Staff"),
-    body());
-}
-
-// ─── Fuel prices ──────────────────────────────────────────────────────────────
-// Each branch's regular gas price is set automatically from the official
-// source for its fuel price area (fleetr-infra automatic_gas_prices.sql). A
-// New Brunswick or PEI branch is given its area from its address. fleetr picks
-// a Nova Scotia or Newfoundland and Labrador branch's zone here, from the
-// Board's zone map, since the zones are drawn only on a map.
-const NSEB_ZONE_MAP = "https://nserbt.ca/nseb/mandates/gasoline-diesel-pricing/gasoline-diesel-prices-zone-map";
-const PUB_ZONE_LIST = "http://www.pub.nl.ca/HowPricesAreSet/Zones.php";
-const FUEL_PROVINCES = [["NL", "Newfoundland and Labrador"], ["NS", "Nova Scotia"], ["NB", "New Brunswick"], ["PE", "Prince Edward Island"], ["CA", "Elsewhere in Canada"]];
-const FUEL_PENDING = {
-  no_area: "No area set",
-  not_from_base: "Price pending: the Board does not price this zone from the base zone",
-  permission: "Price pending: waiting on permission from Natural Resources Canada",
-  not_fetched: "Price pending: not read yet",
-};
-const SOURCE_NAMES = { pub_nl: "Newfoundland and Labrador Public Utilities Board", nseb: "Nova Scotia Energy Board", nbeub: "New Brunswick Energy and Utilities Board", irac: "Island Regulatory and Appeals Commission" };
-const fuelWhen = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never");
-const fuelLine = (a) => {
-  if (!a || a.centsPerLitre == null) return FUEL_PENDING[a?.pending] || FUEL_PENDING.no_area;
-  return `${Number(a.centsPerLitre).toFixed(1)} ¢/L · effective ${a.effectiveDate}${a.stale ? " · stale" : ""}`;
-};
-
-function CompanyFuel({ id }) {
-  const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { branches, areas, sources }
-  const [busyId, setBusyId] = React.useState(null);
-  const [actErr, setActErr] = React.useState("");
-  const [reload, setReload] = React.useState(0);
-
-  React.useEffect(() => {
-    let live = true;
-    adminRequest(`/admin/companies/${encodeURIComponent(id)}/fuel`).then((r) => {
-      if (!live) return;
-      setState(r.ok ? { branches: r.body.branches, areas: r.body.areas, sources: r.body.sources } : { error: r.message });
-    });
-    return () => { live = false; };
-  }, [id, reload]);
-
-  const setArea = (branch, area) => {
-    setBusyId(branch.id);
-    setActErr("");
-    adminRequest(`/admin/companies/${encodeURIComponent(id)}/fuel/${encodeURIComponent(branch.id)}`,
-      { method: "PUT", body: { area: area || null } })
-      .then((r) => {
-        if (!r.ok) { setActErr(r.message); return; }
-        toast(`${branch.name}'s fuel price area is saved.`);
-        setReload((n) => n + 1);
-      })
-      .finally(() => setBusyId(null));
-  };
-
-  const body = () => {
-    if (state === undefined) return h(Skeleton, { lines: 3 });
-    if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
-    const { branches, areas, sources } = state;
-    const byArea = Object.fromEntries(areas.map((a) => [a.area, a]));
-    return h(React.Fragment, null,
-      branches.length === 0
-        ? h("p", { className: "muted" }, "No branches yet.")
-        : h("div", { className: "tableWrap" },
-            h("table", { className: "companyTable" },
-              h("thead", null, h("tr", null, ["Branch", "Fuel price area", "Gas price"].map((c, i) => h("th", { key: i, scope: "col" }, c)))),
-              h("tbody", null, branches.map((b) => h("tr", { key: b.id, style: b.active ? null : { opacity: 0.5 } },
-                h("td", null, b.name),
-                h("td", null, h("select", {
-                  className: "loginInput", "aria-label": `${b.name} fuel price area`, value: b.fuelArea || "",
-                  disabled: busyId !== null, onChange: (e) => setArea(b, e.target.value),
-                },
-                  h("option", { value: "" }, "Not set"),
-                  FUEL_PROVINCES.map(([prov, label]) => h("optgroup", { key: prov, label },
-                    areas.filter((a) => a.province === prov).map((a) => h("option", { key: a.area, value: a.area },
-                      prov === "CA" ? "Elsewhere in Canada (price pending)" : a.areaName)))))),
-                h("td", { className: "small" }, b.fuelArea ? fuelLine(byArea[b.fuelArea]) : FUEL_PENDING.no_area)))))),
-      actErr && h("div", { className: "loginError", role: "alert" }, actErr),
-      h("p", { className: "muted small" },
-        "Nova Scotia zones are drawn on the ",
-        h("a", { href: NSEB_ZONE_MAP, target: "_blank", rel: "noopener noreferrer" }, "Energy Board's zone map"),
-        ". Newfoundland and Labrador zones are listed by the ",
-        h("a", { href: PUB_ZONE_LIST, target: "_blank", rel: "noopener noreferrer" }, "Public Utilities Board"),
-        ". A New Brunswick or PEI branch is given its area from its address."),
-      h("h3", { className: "sectionTitle", style: { marginTop: "20px" } }, "Sources"),
-      h("div", { className: "tableWrap" },
-        h("table", { className: "companyTable" },
-          h("thead", null, h("tr", null, ["Source", "Last read", "Last error"].map((c, i) => h("th", { key: i, scope: "col" }, c)))),
-          h("tbody", null, Object.keys(SOURCE_NAMES).map((k) => {
-            const st = sources.find((x) => x.source === k) || {};
-            const stale = !st.lastOkAt || Date.now() - new Date(st.lastOkAt).getTime() > 14 * 864e5;
-            return h("tr", { key: k },
-              h("td", null, SOURCE_NAMES[k]),
-              h("td", null, fuelWhen(st.lastOkAt), stale && h("span", { className: "pill pill--paused", style: { marginLeft: "8px" } }, "Stale")),
-              h("td", { className: "small" }, st.lastErrorAt && (!st.lastOkAt || st.lastErrorAt > st.lastOkAt)
-                ? `${fuelWhen(st.lastErrorAt)}: ${st.lastError || ""}` : h("span", { className: "muted" }, "None")));
-          })))));
-  };
-
-  return h("section", { className: "detailSection" },
-    h("h2", { className: "sectionTitle" }, "Fuel prices"),
-    h("p", { className: "muted sectionSub" }, "Each branch's regular gas price per litre comes from the official source for its area, read every day. The company sets only its markup, in fleetr."),
     body());
 }
 
@@ -1125,7 +1027,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     navigator.clipboard.writeText(company.joinCode).then(() => toast("Join code copied."), () => {});
   };
   const contact = [company.contactName, company.contactEmail, company.contactPhone].filter(Boolean).join(" · ");
-  const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["fuel", "Fuel prices"], ["features", "Features"], ["danger", "Danger zone"]];
+  const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["danger", "Danger zone"]];
 
   return h(React.Fragment, null,
     back,
@@ -1163,8 +1065,6 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     tab === "setup" && h(SetupProgress, { key: setupKey, id }),
 
     tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1) }),
-
-    tab === "fuel" && h(CompanyFuel, { id }),
 
     tab === "features" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
