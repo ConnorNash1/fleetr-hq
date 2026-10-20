@@ -125,6 +125,8 @@ async function resumeSession() {
 const ICONS = {
   companies: ["M3 21h18", "M5 21V7l7-4 7 4v14", "M9 9h.01", "M15 9h.01", "M9 13h.01", "M15 13h.01", "M10 21v-4h4v4"],
   texts:     ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", "M8 9h8", "M8 13h5"],
+  billing:   ["M6 2h12v20l-3-2-3 2-3-2-3 2z", "M9 7h6", "M9 11h6", "M9 15h4"],
+  dashboard: ["M3 3v18h18", "M7 15v3", "M12 10v8", "M17 6v12"],
   plus:      ["M12 5v14", "M5 12h14"],
   search:    ["M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z", "M21 21l-4.3-4.3"],
   chevron:   ["M9 18l6-6-6-6"],
@@ -319,6 +321,9 @@ function useHashRoute() {
     return () => window.removeEventListener("hashchange", onChange);
   }, []);
   if (hash === "#/texts") return { name: "texts" };
+  if (hash === "#/dashboard") return { name: "dashboard" };
+  const b = hash.match(/^#\/billing(?:\/([^/?#]+)\/(\d{4}-\d{2}))?$/);
+  if (b) return b[1] ? { name: "billingCompany", id: decodeURIComponent(b[1]), month: b[2] } : { name: "billing" };
   const m = hash.match(/^#\/company\/([^/?#]+)$/);
   return m ? { name: "company", id: decodeURIComponent(m[1]) } : { name: "list" };
 }
@@ -576,6 +581,7 @@ const SETUP_ITEMS = {
   vehicles:              "A vehicle at the default branch",
   protection:            "Protection and deductibles",
   contract:              "Contract terms",
+  revenue_share:         "Revenue share, set by fleetr",
   listing:               "fleetr.ai listing",
   staff:                 "Staff besides the Exec",
   test_rentals_finished: "Test rentals finished",
@@ -592,6 +598,7 @@ function setupReason(item) {
     case "vehicles":          return "No vehicle with one of the company's classes at its default branch.";
     case "protection":        return list.length ? `Missing a price or decline wording: ${list.join(", ")}.` : "None added.";
     case "contract":          return "Not saved yet.";
+    case "revenue_share":     return "Not set. Set it on this company's Billing tab.";
     case "listing":           return list.length ? `Incomplete: ${list.join(", ")}.` : "No branch is listed.";
     case "staff":             return "Only the Exec so far.";
     case "test_rentals_finished": return `Still open: ${list.join(", ")}.`;
@@ -1027,7 +1034,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     navigator.clipboard.writeText(company.joinCode).then(() => toast("Join code copied."), () => {});
   };
   const contact = [company.contactName, company.contactEmail, company.contactPhone].filter(Boolean).join(" · ");
-  const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["danger", "Danger zone"]];
+  const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["billing", "Billing"], ["danger", "Danger zone"]];
 
   return h(React.Fragment, null,
     back,
@@ -1085,7 +1092,286 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
       featMsg && h("div", { className: "successMsg", role: "status" }, featMsg),
       featErr && h("div", { className: "loginError", role: "alert" }, featErr)),
 
+    tab === "billing" && h(RevenueShare, { id, onChanged: () => setSetupKey((n) => n + 1) }),
+
     tab === "danger" && h(DeleteCompany, { id, company, onDeleted }));
+}
+
+// ─── Billing ──────────────────────────────────────────────────────────────────
+// Revenue share billing (revenue_share.sql, through the reset worker). Money
+// is in dollars and cents; months are YYYY-MM, each agreement's in its own
+// branch's time.
+const money = (n) => `$${Number(n || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const monthLabel = (m) => { const [y, mo] = String(m).split("-").map(Number); return y && mo ? `${MONTHS_LONG[mo - 1]} ${y}` : m; };
+const shortMonth = (m) => { const [y, mo] = String(m).split("-").map(Number); return y && mo ? `${MONTHS_LONG[mo - 1].slice(0, 3)} ${String(y).slice(2)}` : m; };
+// This month in Newfoundland, fleetr's calendar, and the one before it.
+const thisMonth = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/St_Johns", year: "numeric", month: "2-digit" }).format(new Date()).slice(0, 7);
+const monthBefore = (m) => { const [y, mo] = m.split("-").map(Number); return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, "0")}`; };
+const percentList = (list) => (Array.isArray(list) && list.length ? list.map((x) => `${Number(x)}%`).join(", ") : "Not set");
+const BILLING_REASONS = {
+  bad_percent: "Enter a % from 1 to 10, to two decimal places at most.",
+  month_not_ended: "That month has not ended yet. It can be marked paid once it has.",
+  already_paid: "That month is already marked paid.",
+  bad_date: "Enter the date it was paid, today or earlier.",
+  bad_note: "Keep the note to 500 characters.",
+  number_required: "Enter fleetr's HST number to switch HST on.",
+  bad_number: "Keep the HST number to 40 characters.",
+  bad_rate: "Enter an HST rate from 0 to 30.",
+  not_found: "That company was not found.",
+};
+const billingRefusal = (r) => BILLING_REASONS[r.reason] || r.message;
+
+// A company's revenue share: the % now, a new one from now on, and every
+// one it has had. Never applies to agreements already closed.
+function RevenueShare({ id, onChanged }) {
+  const [history, setHistory] = React.useState(undefined);
+  const [draft, setDraft] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  const load = () => adminRequest(`/admin/companies/${encodeURIComponent(id)}/revenue-share`).then((r) => {
+    setHistory(r.ok ? r.body.history || [] : { error: r.message });
+  });
+  React.useEffect(() => { load(); }, [id]);
+  const save = (e) => {
+    e.preventDefault();
+    const percent = Number(draft);
+    if (!draft.trim() || !Number.isFinite(percent)) { setMsg({ ok: false, text: BILLING_REASONS.bad_percent }); return; }
+    setBusy(true); setMsg(null);
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/revenue-share`, { method: "PUT", body: { percent } }).then((r) => {
+      setBusy(false);
+      if (!r.ok) { setMsg({ ok: false, text: billingRefusal(r) }); return; }
+      setDraft("");
+      toast(`Revenue share set to ${percent}% for agreements closing from now on.`);
+      load(); onChanged && onChanged();
+    });
+  };
+  if (history === undefined) return h("div", { className: "card" }, h(Skeleton, { lines: 3 }));
+  if (history.error) return h("div", { className: "loginError", role: "alert" }, history.error);
+  const now = history[0];
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "Revenue share"),
+    h("p", { className: "muted sectionSub" },
+      now ? `${Number(now.percent)}% of vehicle rental revenue on agreements closed since ${new Date(now.effectiveFrom).toLocaleString("en-CA")}.`
+          : "Not set. The company cannot launch until it is."),
+    h("form", { onSubmit: save, noValidate: true, className: "saveRow" },
+      h("input", { className: "loginInput", style: { maxWidth: "120px" }, inputMode: "decimal", placeholder: "1 to 10",
+        "aria-label": "Revenue share %", value: draft, disabled: busy, onChange: (e) => { setDraft(e.target.value); setMsg(null); } }),
+      h("span", { className: "muted" }, "%"),
+      h("button", { type: "submit", className: "primaryBtn", disabled: busy || !draft.trim() }, busy ? "Saving…" : now ? "Change from now on" : "Set")),
+    msg && h("div", { className: msg.ok ? "successMsg" : "loginError", role: "status" }, msg.text),
+    history.length > 0 && h("table", { className: "companyTable", style: { marginTop: "16px" } },
+      h("thead", null, h("tr", null, h("th", null, "%"), h("th", null, "From"), h("th", null, "Set by"))),
+      h("tbody", null, history.map((x, i) => h("tr", { key: i },
+        h("td", null, `${Number(x.percent)}%`), h("td", null, new Date(x.effectiveFrom).toLocaleString("en-CA")), h("td", null, x.setBy || ""))))));
+}
+
+const csvCell = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+function downloadCsv(name, rows) {
+  const blob = new Blob([rows.map((r) => r.map(csvCell).join(",")).join("\n") + "\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// fleetr's HST on statements: off until switched on, with fleetr's number.
+function HstSettings() {
+  const [s, setS] = React.useState(undefined);
+  const [draft, setDraft] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  React.useEffect(() => {
+    adminRequest("/admin/billing/settings").then((r) => {
+      if (!r.ok) { setS({ error: r.message }); return; }
+      setS(r.body.settings);
+      setDraft({ hstOn: !!r.body.settings.hstOn, hstNumber: r.body.settings.hstNumber || "", hstRate: String(r.body.settings.hstRate ?? 15) });
+    });
+  }, []);
+  if (s === undefined) return h("div", { className: "card" }, h(Skeleton, { lines: 2 }));
+  if (s.error) return h("div", { className: "loginError", role: "alert" }, s.error);
+  const save = (e) => {
+    e.preventDefault();
+    setBusy(true); setMsg(null);
+    adminRequest("/admin/billing/settings", { method: "PUT", body: { hstOn: draft.hstOn, hstNumber: draft.hstNumber || null, hstRate: Number(draft.hstRate) } })
+      .then((r) => {
+        setBusy(false);
+        if (!r.ok) { setMsg({ ok: false, text: billingRefusal(r) }); return; }
+        setS(r.body.settings);
+        toast(draft.hstOn ? "HST is on for statements." : "HST is off for statements.");
+      });
+  };
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "HST on statements"),
+    h("p", { className: "muted sectionSub" }, `Statements are issued by ${s.legalName}. HST is added to the amount owed only while it is on.`),
+    h("form", { onSubmit: save, noValidate: true },
+      h("label", { style: { display: "inline-flex", gap: "8px", alignItems: "center", marginBottom: "12px" } },
+        h("input", { type: "checkbox", checked: draft.hstOn, disabled: busy, onChange: (e) => setDraft({ ...draft, hstOn: e.target.checked }) }),
+        "Show an HST line on statements"),
+      h("div", { className: "detailGrid" },
+        h("div", { className: "detailField" },
+          h("label", { className: "loginLabel", htmlFor: "hst-number" }, "fleetr's HST number"),
+          h("input", { id: "hst-number", className: "loginInput", maxLength: 40, value: draft.hstNumber, disabled: busy,
+            onChange: (e) => setDraft({ ...draft, hstNumber: e.target.value }) })),
+        h("div", { className: "detailField" },
+          h("label", { className: "loginLabel", htmlFor: "hst-rate" }, "HST rate (%)"),
+          h("input", { id: "hst-rate", className: "loginInput", inputMode: "decimal", value: draft.hstRate, disabled: busy,
+            onChange: (e) => setDraft({ ...draft, hstRate: e.target.value }) }))),
+      h("div", { className: "saveRow" }, h("button", { type: "submit", className: "primaryBtn", disabled: busy }, busy ? "Saving…" : "Save")),
+      msg && h("div", { className: msg.ok ? "successMsg" : "loginError", role: "status" }, msg.text)));
+}
+
+// A month's billing: each company's rentals closed, revenue, %, amount owed
+// and status. Last month by default, the one most likely to be billed.
+function BillingScreen() {
+  const [month, setMonth] = React.useState(monthBefore(thisMonth()));
+  const [data, setData] = React.useState(undefined);
+  React.useEffect(() => {
+    let live = true;
+    setData(undefined);
+    adminRequest(`/admin/billing?month=${month}`).then((r) => { if (live) setData(r.ok ? r.body : { error: r.message }); });
+    return () => { live = false; };
+  }, [month]);
+  const rows = data && !data.error ? data.companies : [];
+  const totals = rows.reduce((t, c) => ({ rentals: t.rentals + Number(c.rentals), revenue: t.revenue + Number(c.revenue), owed: t.owed + Number(c.owed) }),
+    { rentals: 0, revenue: 0, owed: 0 });
+  const exportCsv = () => downloadCsv(`fleetr-billing-${month}.csv`, [
+    ["Company", "Month", "Rentals closed", "Revenue", "Revenue share", "Amount owed", "Status", "Paid on", "Due", "Note"],
+    ...rows.map((c) => [c.company, month, c.rentals, Number(c.revenue).toFixed(2), percentList(c.percents), Number(c.owed).toFixed(2),
+      c.status === "paid" ? "Paid" : "Unpaid", c.paidOn || "", c.dueDate, c.note || ""]),
+  ]);
+  return h(React.Fragment, null,
+    h("h1", { className: "pageTitle" }, "Billing"),
+    h("div", { className: "saveRow", style: { marginBottom: "16px" } },
+      h("label", { className: "loginLabel", htmlFor: "billing-month", style: { margin: 0 } }, "Month"),
+      h("input", { id: "billing-month", type: "month", className: "loginInput", style: { maxWidth: "200px" }, value: month, max: thisMonth(),
+        onChange: (e) => e.target.value && setMonth(e.target.value) }),
+      h("button", { type: "button", className: "linkBtn", disabled: !rows.length, onClick: exportCsv }, "Export CSV")),
+    data === undefined ? h("div", { className: "card" }, h(Skeleton, { lines: 4 }))
+    : data.error ? h("div", { className: "loginError", role: "alert" }, data.error)
+    : h("div", { className: "card" },
+        h("p", { className: "muted", style: { marginTop: 0 } }, `${monthLabel(month)}. Due ${data.dueDate}.`),
+        h("table", { className: "companyTable" },
+          h("thead", null, h("tr", null, ["Company", "Rentals closed", "Revenue", "%", "Amount owed", "Status"].map((x) => h("th", { key: x }, x)))),
+          h("tbody", null,
+            rows.map((c) => h("tr", { key: c.operatorId, style: { cursor: "pointer" },
+              onClick: () => { window.location.hash = `#/billing/${encodeURIComponent(c.operatorId)}/${month}`; } },
+              h("td", null, h("a", { href: `#/billing/${encodeURIComponent(c.operatorId)}/${month}` }, c.company)),
+              h("td", null, c.rentals), h("td", null, money(c.revenue)), h("td", null, percentList(c.percents)),
+              h("td", null, money(c.owed)),
+              h("td", null, h("span", { className: `pill pill--${c.status === "paid" ? "live" : "setup"}` }, c.status === "paid" ? `Paid ${c.paidOn}` : "Unpaid")))),
+            rows.length > 0 && h("tr", null, h("td", null, h("b", null, "Total")), h("td", null, totals.rentals),
+              h("td", null, money(totals.revenue)), h("td", null), h("td", null, h("b", null, money(totals.owed))), h("td", null)))),
+        !rows.length && h("p", { className: "muted" }, "No company was billed this month.")),
+    h(HstSettings));
+}
+
+// One company's month: the agreements behind it, and marking it paid.
+function BillingCompanyScreen({ id, month }) {
+  const [data, setData] = React.useState(undefined);
+  const [paidOn, setPaidOn] = React.useState(new Intl.DateTimeFormat("en-CA", { timeZone: "America/St_Johns" }).format(new Date()));
+  const [note, setNote] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  const load = () => adminRequest(`/admin/billing/${encodeURIComponent(id)}?month=${month}`).then((r) => setData(r.ok ? r.body : { error: r.message }));
+  React.useEffect(() => { load(); }, [id, month]);
+  const back = h("nav", { className: "crumbs", "aria-label": "Breadcrumb" },
+    h("a", { href: "#/billing" }, "Billing"), h(Icon, { name: "chevron", size: 14 }),
+    h("span", { "aria-current": "page" }, data && data.summary ? `${data.summary.company}, ${monthLabel(month)}` : monthLabel(month)));
+  if (data === undefined) return h(React.Fragment, null, back, h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
+  if (data.error) return h(React.Fragment, null, back, h("div", { className: "loginError", role: "alert" }, data.error));
+  const sm = data.summary;
+  const markPaid = (e) => {
+    e.preventDefault();
+    setBusy(true); setMsg(null);
+    adminRequest(`/admin/billing/${encodeURIComponent(id)}/paid`, { method: "POST", body: { month, paidOn, note: note.trim() || null } }).then((r) => {
+      setBusy(false);
+      if (!r.ok) { setMsg({ ok: false, text: billingRefusal(r) }); return; }
+      toast(`${sm.company}, ${monthLabel(month)} marked paid.`);
+      load();
+    });
+  };
+  return h(React.Fragment, null, back,
+    h("h1", { className: "pageTitle" }, `${sm.company}, ${monthLabel(month)}`),
+    h("div", { className: "card" },
+      h("p", { style: { marginTop: 0 } },
+        `${sm.rentals} rental${Number(sm.rentals) === 1 ? "" : "s"} closed, ${money(sm.revenue)} revenue at ${percentList(sm.percents)}: `,
+        h("b", null, `${money(sm.owed)} owed`), `, due ${sm.dueDate}.`),
+      Number(sm.overrides) > 0 && h("p", { className: "muted" }, `${sm.overrides} with a manual rate, flagged below.`),
+      sm.status === "paid"
+        ? h("p", null, h("span", { className: "pill pill--live" }, `Paid ${sm.paidOn}`), sm.note ? ` ${sm.note}` : "")
+        : !sm.ended
+          ? h("p", { className: "muted" }, "This month can be marked paid once it has ended.")
+          : h("form", { onSubmit: markPaid, noValidate: true, className: "saveRow" },
+              h("input", { type: "date", className: "loginInput", style: { maxWidth: "180px" }, "aria-label": "Paid on", value: paidOn, disabled: busy,
+                onChange: (e) => setPaidOn(e.target.value) }),
+              h("input", { className: "loginInput", style: { maxWidth: "320px" }, placeholder: "Note, like e-transfer", maxLength: 500, value: note, disabled: busy,
+                onChange: (e) => setNote(e.target.value) }),
+              h("button", { type: "submit", className: "primaryBtn", disabled: busy || !paidOn }, busy ? "Saving…" : "Mark paid")),
+      msg && h("div", { className: msg.ok ? "successMsg" : "loginError", role: "status" }, msg.text)),
+    h("div", { className: "card" },
+      data.agreements.length === 0 ? h("p", { className: "muted" }, "No agreements closed this month.")
+      : h("table", { className: "companyTable" },
+          h("thead", null, h("tr", null, ["Closed", "Reservation", "Branch", "Class", "Revenue", "%", "Owed", "Flags"].map((x) => h("th", { key: x }, x)))),
+          h("tbody", null, data.agreements.map((a) => h("tr", { key: a.agreementId },
+            h("td", null, a.closedOn), h("td", null, a.resCode || ""), h("td", null, a.branch || ""), h("td", null, a.vehicleClass || ""),
+            h("td", null, money(a.revenue)), h("td", null, a.percent == null ? "Not set" : `${Number(a.percent)}%`), h("td", null, money(a.owed)),
+            h("td", null, [
+              a.override && `Manual rate (rates give ${money(a.expectedRevenue)})`,
+              a.source === "rates" && "No charges saved, priced from rates",
+              a.changedAfterPaid && "Changed after paid",
+            ].filter(Boolean).join(". "))))))));
+}
+
+// A 12-month bar chart: one bar a month, a second series drawn inside it
+// when given (collected inside owed). Plain SVG, sized to its box.
+function MonthBars({ months, value, inner, format, label }) {
+  const W = 640, H = 180, pad = 28, gap = 6;
+  const max = Math.max(1, ...months.map((m) => Number(value(m)) || 0));
+  const bw = (W - pad) / months.length - gap;
+  return h("figure", { style: { margin: 0 } },
+    h("figcaption", { className: "muted", style: { fontSize: "0.85rem", marginBottom: "6px" } }, label),
+    h("svg", { viewBox: `0 0 ${W} ${H + 22}`, width: "100%", role: "img", "aria-label": label },
+      months.map((m, i) => {
+        const v = Number(value(m)) || 0, x = pad + i * (bw + gap);
+        const bh = (v / max) * H, ih = inner ? ((Number(inner(m)) || 0) / max) * H : 0;
+        return h("g", { key: m.month },
+          h("title", null, `${monthLabel(m.month)}: ${format(v)}${inner ? `, ${format(inner(m))} collected` : ""}`),
+          h("rect", { x, y: H - bh, width: bw, height: bh, rx: 3, fill: "var(--terracotta-soft)" }),
+          inner && h("rect", { x, y: H - ih, width: bw, height: ih, rx: 3, fill: "var(--terracotta)" }),
+          h("text", { x: x + bw / 2, y: H + 16, textAnchor: "middle", fontSize: 11, fill: "var(--muted)" }, shortMonth(m.month)));
+      })));
+}
+
+// fleetr's own numbers, month by month.
+function DashboardScreen() {
+  const [d, setD] = React.useState(undefined);
+  React.useEffect(() => { adminRequest("/admin/dashboard?months=12").then((r) => setD(r.ok ? r.body : { error: r.message })); }, []);
+  const title = h("h1", { className: "pageTitle" }, "Dashboard");
+  if (d === undefined) return h(React.Fragment, null, title, h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
+  if (d.error) return h(React.Fragment, null, title, h("div", { className: "loginError", role: "alert" }, d.error));
+  const ms = d.months, cur = ms[ms.length - 1], prev = ms[ms.length - 2] || {};
+  const change = (pct) => (pct == null ? "No change to compare" : `${pct > 0 ? "+" : ""}${pct}% on last month`);
+  const tile = (label, value, sub) => h("div", { className: "card", style: { margin: 0 } },
+    h("div", { className: "muted", style: { fontSize: "0.85rem" } }, label),
+    h("div", { style: { fontSize: "1.6rem", fontWeight: 700, margin: "4px 0" } }, value),
+    sub && h("div", { className: "muted", style: { fontSize: "0.8rem" } }, sub));
+  return h(React.Fragment, null, title,
+    h("p", { className: "muted", style: { marginTop: 0 } }, `${monthLabel(cur.month)} so far, in Newfoundland time.`),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px" } },
+      tile("fleetr revenue owed", money(cur.owed), change(d.change.owed)),
+      tile("Collected", money(cur.collected), `Last month: ${money(prev.collected)} of ${money(prev.owed)}`),
+      tile("Outstanding", money(d.outstanding), "Unpaid on months that have ended"),
+      tile("Rental revenue processed", money(cur.processed), change(d.change.processed)),
+      tile("Effective take rate", cur.takeRate == null ? "None yet" : `${Number(cur.takeRate)}%`, "fleetr revenue over rental revenue processed"),
+      tile("Vehicles under management", cur.snapshot ? Number(cur.vehicles).toLocaleString("en-CA") : "Recorded daily", cur.snapshot ? change(d.change.vehicles) : "The first count is taken at 07:00 UTC"),
+      tile("Active companies", cur.snapshot ? cur.activeCompanies : "Recorded daily", "Launched, not paused or suspended"),
+      tile("Rentals closed", Number(cur.rentals).toLocaleString("en-CA"), `Last month: ${Number(prev.rentals || 0).toLocaleString("en-CA")}`)),
+    h("div", { className: "card" }, h(MonthBars, { months: ms, value: (m) => m.owed, inner: (m) => m.collected, format: money,
+      label: "fleetr revenue by month: owed (light), collected (dark)" })),
+    h("div", { className: "card" }, h(MonthBars, { months: ms, value: (m) => m.processed, format: money, label: "Rental revenue processed by month" })),
+    h("div", { className: "card" }, h(MonthBars, { months: ms, value: (m) => m.vehicles, format: (v) => `${v} vehicles`, label: "Vehicles under management by month" })),
+    h("div", { className: "card" }, h(MonthBars, { months: ms, value: (m) => m.rentals, format: (v) => `${v} rentals`, label: "Rentals closed by month" })));
 }
 
 // ─── Customer texts ───────────────────────────────────────────────────────────
@@ -1307,7 +1593,9 @@ function CustomerTextsScreen() {
 // The staff app's dark sidebar on a wide screen, with the highlight behind
 // the current page; on a phone, the website's top bar and its drop-down menu.
 const NAV = [
+  { key: "dashboard", label: "Dashboard", href: "#/dashboard", icon: "dashboard" },
   { key: "companies", label: "Companies", href: "#/", icon: "companies" },
+  { key: "billing", label: "Billing", href: "#/billing", icon: "billing" },
   { key: "texts", label: "Customer texts", href: "#/texts", icon: "texts" },
 ];
 
@@ -1322,7 +1610,8 @@ function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }
     onSignOut();
   };
   React.useEffect(() => { setMenu(false); }, [route.name, route.id]);
-  const current = route.name === "texts" ? "texts" : "companies";
+  const current = route.name === "texts" ? "texts" : route.name === "dashboard" ? "dashboard"
+    : route.name === "billing" || route.name === "billingCompany" ? "billing" : "companies";
   const email = (supabase.auth.session() && supabase.auth.session().user && supabase.auth.session().user.email) || "";
   const navLinks = (cls) => NAV.map((n) => h("a", {
     key: n.key, href: n.href, className: `${cls}${current === n.key ? ` ${cls}--on` : ""}`, "aria-current": current === n.key ? "page" : undefined,
@@ -1353,6 +1642,9 @@ function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }
     h("main", { className: "main" },
       h("div", { className: "main__inner" },
         route.name === "texts" ? h(CustomerTextsScreen) :
+        route.name === "dashboard" ? h(DashboardScreen) :
+        route.name === "billing" ? h(BillingScreen) :
+        route.name === "billingCompany" ? h(BillingCompanyScreen, { key: `${route.id}:${route.month}`, id: route.id, month: route.month }) :
         route.name === "company"
           ? h(CompanyDetailScreen, { key: route.id, id: route.id, onUpdated, onDeleted: (gone) => {
               // Nothing is left to save, so leave without asking.
