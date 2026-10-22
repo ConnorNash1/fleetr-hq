@@ -208,12 +208,12 @@ function Skeleton({ lines = 3 }) {
 }
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
-// The fleetr logo, from the supplied files and never retyped, then "hq".
-// tone "dark" is the off-white logo for the dark sidebar; otherwise the
-// near-black one, for light backgrounds.
+// The fleetr wordmark (wordmark.svg, "fleetr" in Inter SemiBold as
+// outlines), then "hq". tone "dark" is #F9F9F7 for the dark sidebar;
+// otherwise terracotta, for light backgrounds.
 function Wordmark({ tone } = {}) {
   return h("div", { className: "wordmark" },
-    h("img", { className: "wordmarkLogo", src: tone === "dark" ? "./fleetr-horizontal-dark.svg" : "./fleetr-horizontal-light.svg", alt: "fleetr" }),
+    h("span", { className: `wordmarkLogo${tone === "dark" ? " wordmarkLogo--dark" : ""}`, role: "img", "aria-label": "fleetr" }),
     h("span", { className: "wordmarkHq" }, "hq"));
 }
 
@@ -1716,10 +1716,11 @@ const css = `
 .textMeasure{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-top:10px;font-size:0.85rem}
 .textChip{font-weight:600;font-size:0.8rem;padding:2px 10px;border-radius:999px;background:var(--border)}
 .textChip--warn{background:var(--terracotta)}
-/* The logo is 1113 by 260: 30px tall keeps it over the 96px minimum width,
-   and the padding keeps its clear space, one bar of the mark. */
+/* The wordmark, drawn as a mask in the colour for its background, 30px
+   tall; its width follows the wordmark's shape. */
 .wordmark{display:inline-flex;align-items:center;gap:10px;padding:8px 0;font-size:1.75rem;font-weight:700;letter-spacing:-0.02em;line-height:1}
-.wordmarkLogo{display:block;height:30px;width:auto}
+.wordmarkLogo{display:block;height:30px;width:calc(30px * 3.1099);background-color:#F4845F;-webkit-mask:url(./wordmark.svg) center / contain no-repeat;mask:url(./wordmark.svg) center / contain no-repeat}
+.wordmarkLogo--dark{background-color:#F9F9F7}
 .wordmarkHq{font-weight:500;color:var(--muted);margin-left:6px}
 .muted{color:var(--muted)}
 .setupHeading{font-size:0.95rem;margin:16px 0 6px}
@@ -1863,7 +1864,7 @@ select.loginInput{appearance:auto}
   background:#1F1E1D;color:#F9F9F7;padding:20px 14px}
 .side__brand{padding:4px 10px 22px}
 .side .wordmark{color:#F9F9F7;font-size:1.6rem}
-.side .wordmarkLogo{height:28px}
+.side .wordmarkLogo{height:28px;width:calc(28px * 3.1099)}
 .side .wordmarkHq{color:rgba(249,249,247,0.55)}
 .side__label{font-size:0.68rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(249,249,247,0.45);padding:0 10px 8px}
 .side__nav{display:flex;flex-direction:column;gap:2px}
@@ -1885,7 +1886,7 @@ select.loginInput{appearance:auto}
   .topbar{display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;height:60px;padding:0 16px;
     background:rgba(249,249,247,0.8);-webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}
   .topbar .wordmark{font-size:1.4rem}
-  .topbar .wordmarkLogo{height:26px}
+  .topbar .wordmarkLogo{height:26px;width:calc(26px * 3.1099)}
   .main__inner{padding:20px 16px 48px}
 }
 .menuBtn{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 14px;border:1px solid var(--border);border-radius:999px;
