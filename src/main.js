@@ -236,33 +236,27 @@ function LoginScreen({ onSuccess, notice }) {
       .finally(() => setLoading(false));
   };
 
-  return h("div", { className: "loginWrap" },
-    h("div", { className: "loginCard" },
-      // A short terracotta light runs round the edge of the card, one side
-      // after the next. Still, as a plain top bar, for reduced motion.
-      h("div", { className: "loginBeams", "aria-hidden": "true" },
-        h("span", { className: "loginBeam loginBeam--top" }),
-        h("span", { className: "loginBeam loginBeam--right" }),
-        h("span", { className: "loginBeam loginBeam--bottom" }),
-        h("span", { className: "loginBeam loginBeam--left" })),
-      h(Wordmark),
-      h("div", { className: "loginSubtitle" }, "Platform admins only."),
-      h("form", { className: "loginForm", onSubmit: handleSubmit },
-        h("label", { className: "loginLabel", htmlFor: "email" }, "Email"),
+  // As the staff app's sign-in page draws it (fleetr-internal LoginScreen):
+  // the card, the centred wordmark, two fields and the terracotta pill.
+  return h("div", { className: "hqSignIn" },
+    h("div", { className: "hqSignIn__card" },
+      h("h1", { className: "hqSignIn__brand", "aria-label": "fleetr HQ" },
+        h("span", { className: "wordmarkLogo hqSignIn__wordmark", "aria-hidden": "true" }),
+        h("span", { className: "hqSignIn__hq", "aria-hidden": "true" }, "HQ")),
+      h("form", { className: "hqSignIn__form", onSubmit: handleSubmit },
         h("input", {
-          id: "email", className: "loginInput", type: "email", required: true,
-          autoComplete: "username", value: email,
+          id: "email", className: "hqSignIn__input", type: "email", required: true, placeholder: "Email",
+          "aria-label": "Email", autoComplete: "username", value: email,
           onChange: (e) => { setEmail(e.target.value); setError(""); },
         }),
-        h("label", { className: "loginLabel", htmlFor: "password" }, "Password"),
         h("input", {
-          id: "password", className: "loginInput", type: "password", required: true,
-          maxLength: PASSWORD_MAX, autoComplete: "current-password", value: password,
+          id: "password", className: "hqSignIn__input", type: "password", required: true, placeholder: "Password",
+          "aria-label": "Password", maxLength: PASSWORD_MAX, autoComplete: "current-password", value: password,
           onChange: (e) => { setPassword(e.target.value); setError(""); },
         }),
-        h("button", { type: "submit", className: "loginBtn", disabled: loading },
+        h("button", { type: "submit", className: "hqSignIn__btn", disabled: loading },
           loading ? "Signing in…" : "Sign in"),
-        error && h("div", { className: "loginError", role: "alert" }, error))));
+        error && h("div", { className: "hqSignIn__error", role: "alert" }, error))));
 }
 
 // ─── Creating a company ───────────────────────────────────────────────────────
@@ -1731,27 +1725,24 @@ const css = `
 .staffActions{display:flex;gap:14px;flex-wrap:wrap;white-space:nowrap}
 
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
-.loginCard{position:relative;width:100%;max-width:380px;padding:36px 28px 28px;background:var(--card);
-  border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;text-align:center}
-.loginCard{box-shadow:0 1px 2px rgba(31,30,29,0.05),0 12px 32px rgba(31,30,29,0.08)}
-.loginBeams{position:absolute;inset:0;pointer-events:none;border-radius:inherit;overflow:hidden}
-.loginBeam{position:absolute;display:block}
-.loginBeam--top,.loginBeam--bottom{height:2px;width:45%}
-.loginBeam--left,.loginBeam--right{width:2px;height:45%}
-.loginBeam--top{top:0;left:-45%;background:linear-gradient(90deg,transparent,var(--terracotta));animation:beamTop 6s linear infinite}
-.loginBeam--right{right:0;top:-45%;background:linear-gradient(180deg,transparent,var(--terracotta));animation:beamRight 6s linear infinite}
-.loginBeam--bottom{bottom:0;right:-45%;background:linear-gradient(270deg,transparent,var(--terracotta));animation:beamBottom 6s linear infinite}
-.loginBeam--left{left:0;bottom:-45%;background:linear-gradient(0deg,transparent,var(--terracotta));animation:beamLeft 6s linear infinite}
-@keyframes beamTop{0%{left:-45%}25%,100%{left:100%}}
-@keyframes beamRight{0%,25%{top:-45%}50%,100%{top:100%}}
-@keyframes beamBottom{0%,50%{right:-45%}75%,100%{right:100%}}
-@keyframes beamLeft{0%,75%{bottom:-45%}100%{bottom:100%}}
-@media (prefers-reduced-motion:reduce){
-  .loginBeam{animation:none}
-  .loginBeam--top{left:0;width:100%;height:4px;background:var(--terracotta)}
-  .loginBeam--right,.loginBeam--bottom,.loginBeam--left{display:none}
-}
-.loginSubtitle{color:var(--muted);font-size:0.9rem;margin:4px 0 24px}
+/* The sign-in page, as the staff app draws its own: the same card, wordmark,
+   fields, spacing and terracotta pill, with no animation. */
+.hqSignIn{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#F9F9F7;font-family:'Inter',sans-serif}
+.hqSignIn__card{background:#F9F9F7;border-radius:16px;padding:40px;width:340px;max-width:calc(100% - 32px);box-sizing:border-box;
+  box-shadow:0 4px 24px rgba(0,0,0,0.10),0 1.5px 6px rgba(0,0,0,0.06)}
+.hqSignIn__brand{display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0;margin:0 0 28px;line-height:1}
+.hqSignIn__wordmark{height:35px;width:calc(35px * 3.1099)}
+.hqSignIn__hq{font-size:26px;font-weight:600;letter-spacing:-0.02em;color:#1F1E1D}
+.hqSignIn__form{display:flex;flex-direction:column;gap:12px;margin:0}
+.hqSignIn__input{border:1px solid #E3E2DE;border-radius:8px;padding:12px 14px;font-size:14.5px;font-family:inherit;
+  color:#1F1E1D;background:#fff;outline:none}
+.hqSignIn__input:focus{border-color:#F4845F;box-shadow:0 0 0 3px rgba(244,132,95,0.18)}
+.hqSignIn__btn{display:flex;align-items:center;justify-content:center;width:100%;margin-top:8px;padding:13px 16px;
+  border:none;border-radius:999px;background:#F4845F;color:#F9F9F7;font-family:inherit;font-size:15px;font-weight:700;
+  letter-spacing:0.01em;cursor:pointer}
+.hqSignIn__btn:hover:not(:disabled){background:#E06D47}
+.hqSignIn__btn:disabled{opacity:0.6;cursor:default}
+.hqSignIn__error{font-size:13px;color:#c0392b;text-align:center;font-weight:500}
 .loginForm{display:flex;flex-direction:column;text-align:left}
 .loginLabel{font-size:0.8rem;font-weight:600;margin:0 0 6px}
 .loginInput{font:inherit;color:var(--text);background:var(--card);padding:10px 12px;margin-bottom:16px;
