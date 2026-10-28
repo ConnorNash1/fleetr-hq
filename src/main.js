@@ -1712,9 +1712,9 @@ const css = `
 .textChip{font-weight:600;font-size:0.8rem;padding:2px 10px;border-radius:999px;background:var(--border)}
 .textChip--warn{background:var(--terracotta)}
 /* The logo then "hq", the logo 30px tall; its width keeps the logo's
-   4042 by 711 shape. */
+   4059 by 729 shape. */
 .wordmark{display:inline-flex;align-items:center;gap:10px;padding:8px 0;font-size:1.75rem;font-weight:700;letter-spacing:-0.02em;line-height:1}
-.wordmarkLogo{display:block;flex:none;height:30px;width:calc(30px * 4042 / 711)}
+.wordmarkLogo{display:block;flex:none;height:30px;width:calc(30px * 4059 / 729)}
 .wordmarkHq{font-weight:500;color:var(--muted);margin-left:6px}
 .muted{color:var(--muted)}
 .setupHeading{font-size:0.95rem;margin:16px 0 6px}
@@ -1731,7 +1731,7 @@ const css = `
 .hqSignIn__card{background:#F9F9F7;border-radius:16px;padding:40px;width:340px;max-width:calc(100% - 32px);box-sizing:border-box;
   box-shadow:0 4px 24px rgba(0,0,0,0.10),0 1.5px 6px rgba(0,0,0,0.06)}
 .hqSignIn__brand{display:flex;justify-content:center;align-items:center;gap:8px;padding:8px 0;margin:0 0 28px;line-height:1}
-.hqSignIn__wordmark{height:35px;width:calc(35px * 4042 / 711)}
+.hqSignIn__wordmark{height:35px;width:calc(35px * 4059 / 729)}
 .hqSignIn__hq{font-size:26px;font-weight:600;letter-spacing:-0.02em;color:#1F1E1D}
 .hqSignIn__form{display:flex;flex-direction:column;gap:12px;margin:0}
 .hqSignIn__input{border:1px solid #E3E2DE;border-radius:8px;padding:12px 14px;font-size:14.5px;font-family:inherit;
@@ -1855,7 +1855,7 @@ select.loginInput{appearance:auto}
   background:#1F1E1D;color:#F9F9F7;padding:20px 14px}
 .side__brand{padding:4px 10px 22px}
 .side .wordmark{color:#F9F9F7;font-size:1.6rem}
-.side .wordmarkLogo{height:24px;width:calc(24px * 4042 / 711)}
+.side .wordmarkLogo{height:24px;width:calc(24px * 4059 / 729)}
 .side .wordmarkHq{color:rgba(249,249,247,0.55)}
 .side__label{font-size:0.68rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(249,249,247,0.45);padding:0 10px 8px}
 .side__nav{display:flex;flex-direction:column;gap:2px}
@@ -1877,7 +1877,7 @@ select.loginInput{appearance:auto}
   .topbar{display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;height:60px;padding:0 16px;
     background:rgba(249,249,247,0.8);-webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--border)}
   .topbar .wordmark{font-size:1.4rem}
-  .topbar .wordmarkLogo{height:26px;width:calc(26px * 4042 / 711)}
+  .topbar .wordmarkLogo{height:26px;width:calc(26px * 4059 / 729)}
   .main__inner{padding:20px 16px 48px}
 }
 .menuBtn{display:inline-flex;align-items:center;gap:8px;height:38px;padding:0 14px;border:1px solid var(--border);border-radius:999px;
