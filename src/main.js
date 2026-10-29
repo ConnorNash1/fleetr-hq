@@ -199,12 +199,198 @@ function Toaster() {
         onClick: () => setList((l) => l.filter((x) => x.id !== t.id)) }, h(Icon, { name: "close", size: 14 })))));
 }
 
-// Grey shapes with a sheen passing over them while something loads, the
-// website's skeleton.
-function Skeleton({ lines = 3 }) {
-  return h("div", { className: "skel", "aria-busy": "true", "aria-label": "Loading" },
-    h("div", { className: "sk sk--title" }),
-    Array.from({ length: lines }, (_, i) => h("div", { key: i, className: "sk sk--row" })));
+// ─── Loading skeletons ────────────────────────────────────────────────────────
+// What a screen shows while its data is on the way: the screen itself, built
+// from the same elements and classes, so every box and row sits where the
+// loaded one will. Words keep their own size and are drawn as grey bars;
+// controls are their own boxes filled grey; one sheen passes over it all. The
+// staff app's skeletons, the same way. Unseen for its first 150ms, so a quick
+// load goes straight to the screen.
+const SKEL_ROWS = 4;
+const skT = (text, key) => h("span", { key, className: "skelText" }, text);
+const skB = (tag, className, children, key, style) =>
+  h(tag, { key, style, className: `${className} skelBox`, tabIndex: -1, type: tag === "button" ? "button" : undefined }, children);
+const skRows = (n, row) => Array.from({ length: n }, (_, i) => row(i));
+const skNames = ["Avalon Rentals", "Harbour Car Hire", "Northside Auto", "Bay Vehicle Rentals"];
+
+// One that takes over from a skeleton already showing (the company, then its
+// setup) shows at once, rather than blanking for 150ms between: the new one
+// is drawn while the old one is still counted here.
+const SKEL_DELAY_MS = 150;
+let skelShowing = 0;
+function SkeletonFrame({ children }) {
+  const [shown, setShown] = React.useState(() => skelShowing > 0);
+  React.useEffect(() => {
+    if (shown) {
+      skelShowing += 1;
+      return () => { skelShowing -= 1; };
+    }
+    const t = setTimeout(() => setShown(true), SKEL_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [shown]);
+  return h("div", { className: shown ? "skelPage skelPage--shown" : "skelPage", role: "status", "aria-busy": "true" },
+    h("span", { className: "skelSr" }, "Loading"),
+    h("div", { className: "skelPage__body", "aria-hidden": "true", inert: "" }, children));
+}
+
+const skTable = (cols, cells, rows = SKEL_ROWS, style) => h("table", { className: "companyTable", style },
+  h("thead", null, h("tr", null, cols.map((c, i) => h("th", { key: i, scope: "col" }, c ? skT(c) : null)))),
+  h("tbody", null, skRows(rows, (r) => h("tr", { key: r }, cells.map((c, i) => {
+    const v = Array.isArray(c) ? c[r % c.length] : c;
+    return h("td", { key: i }, typeof v === "string" ? skT(v) : v);
+  })))));
+const skCrumbs = (first, last) => h("nav", { className: "crumbs" },
+  h("a", null, skT(first)), h(Icon, { name: "chevron", size: 14 }), h("span", { "aria-current": "page" }, skT(last)));
+
+const SK_SCREENS = {
+  list: () => h(React.Fragment, null,
+    h("div", { className: "titleRow" },
+      h("div", null,
+        h("h1", { className: "pageTitle" }, skT("Companies")),
+        h("p", { className: "muted pageSub" }, skT("0 companies on fleetr"))),
+      skB("button", "motionBtn", [h("span", { key: "i", className: "motionBtn__icon" }, h(Icon, { name: "plus", size: 18 })),
+        h("span", { key: "l", className: "motionBtn__label" }, "New company")])),
+    h("div", { className: "statRow" }, ["Companies", "Live", "In setup", "Suspended"].map((label) =>
+      h("button", { key: label, type: "button", tabIndex: -1, className: "statTile" },
+        h("span", { className: "statTile__value" }, skT("0")), h("span", { className: "statTile__label" }, skT(label))))),
+    h("div", { className: "card listCard" },
+      h("div", { className: "toolbar" },
+        h("label", { className: "searchBox" }, h(Icon, { name: "search", size: 16 }), h("input", { type: "search", placeholder: "Search companies", tabIndex: -1, readOnly: true })),
+        h("div", { className: "chips" }, LIST_FILTERS.map(([key, label]) =>
+          h("button", { key, type: "button", tabIndex: -1, className: "chip" }, label, h("span", { className: "chip__count" }, "0"))))),
+      h("div", { className: "tableWrap" }, skTable(
+        [h("button", { type: "button", tabIndex: -1, className: "sortBtn" }, skT("Company"), h(Icon, { name: "sort", size: 13 })), "Status", "Setup", "Plan", ""],
+        [skNames.map((n) => h("div", { className: "nameCell" }, skB("span", "avatar", initialsOf(n)), h("a", { className: "companyLink" }, skT(n)))),
+          skB("span", "badge badge-active", [h("span", { key: "d", className: "badge__dot" }), "Active"]), skB("span", "pill pill--live", "Live"), "Standard",
+          h(Icon, { name: "chevron", size: 16 })], 6)))),
+
+  company: () => skCompany(skCrumbs("Companies", "Company")),
+  billing: () => h(React.Fragment, null, h("h1", { className: "pageTitle" }, skT("Billing")), skBillingControls(), skBillingCard(), skHst()),
+  billingCompany: () => skBillingCompany(skCrumbs("Billing", "Avalon Rentals, October 2026")),
+  dashboard: () => h(React.Fragment, null, h("h1", { className: "pageTitle" }, skT("Dashboard")), skDashboard()),
+  texts: () => h(React.Fragment, null, h("h1", { className: "pageTitle" }, skT("Customer texts")), skTexts()),
+};
+
+function skCompany(back) {
+  return h(React.Fragment, null, back,
+    h("div", { className: "card hero" },
+      skB("span", "avatar avatar--lg", "AR"),
+      h("div", { className: "hero__main" },
+        h("h1", { className: "pageTitle hero__name" }, skT("Avalon Rentals")),
+        h("div", { className: "hero__badges" }, skB("span", "badge badge-active", [h("span", { key: "d", className: "badge__dot" }), "Active"], 1), skB("span", "pill pill--live", "Live", 2)),
+        h("div", { className: "muted hero__contact" }, skT("Alex Morgan · alex@example.com · 709 555 0110"))),
+      h("div", { className: "hero__code" },
+        h("span", { className: "hero__codeLabel" }, skT("Join code")),
+        skB("div", "codeChip", [h("span", { key: "c" }, "ABCD2345"), h("span", { key: "b", className: "iconBtn" }, h(Icon, { name: "copy", size: 15 }))]))),
+    h("div", { className: "tabs" }, [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["billing", "Billing"], ["danger", "Danger zone"]].map(([key, label]) =>
+      h("button", { key, type: "button", tabIndex: -1, className: `tab${key === "setup" ? " tab--on" : ""}${key === "danger" ? " tab--danger" : ""}` }, key === "setup" ? skT(label) : label))),
+    skSetup());
+}
+
+// The Setup tab: the progress bar, where the company is, and its steps.
+function skSetup() {
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, skT("Setup")),
+    h("div", { className: "progress" },
+      h("div", { className: "progress__top" }, h("span", { className: "progress__count" }, skT("0 of 10 required done")), h("span", { className: "progress__pct" }, skT("0%"))),
+      h("div", { className: "progress__bar" }, h("span", { style: { width: "0%" } }))),
+    h("p", { className: "setupWhere" }, skT("In setup. 10 of 10 required items left.")),
+    h("h3", { className: "setupHeading" }, skT("Required before launch")),
+    h("ul", { className: "steps" }, Object.keys(SETUP_ITEMS).slice(0, 10).map((key) => h("li", { key, className: "step step--left" },
+      skB("span", "step__node"),
+      h("div", { className: "step__body" },
+        h("div", { className: "step__title" }, skT(SETUP_ITEMS[key]), h("span", { className: "step__state" }, skT("Left to do"))),
+        h("div", { className: "muted step__why" }, skT("Not set.")))))));
+}
+
+function skStaff() {
+  return h("div", { className: "tableWrap" }, skTable(["Name", "Email", "Role", "Branch", "Status", "Signed up", ""],
+    [h("div", { className: "nameCell" }, skB("span", "avatar", "AM"), h("div", null, skT("Alex Morgan"), h("div", { className: "muted small" }, skT("amorgan")))),
+      "alex@example.com", ["Exec", "Agent"], ["All branches", "Airport"], skB("span", "pill pill--live", "Approved"), "Oct 29, 2026", ""], 3));
+}
+
+function skRevenue() {
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, skT("Revenue share")),
+    h("p", { className: "muted sectionSub" }, skT("5% of vehicle rental revenue on agreements closed since 2026-10-01, 9:00:00 a.m..")),
+    h("div", { className: "saveRow" },
+      h("input", { className: "loginInput", style: { maxWidth: "120px" }, placeholder: "1 to 10", tabIndex: -1, readOnly: true }),
+      h("span", { className: "muted" }, skT("%")),
+      skB("button", "primaryBtn", "Change from now on")),
+    skTable(["%", "From", "Set by"], ["5%", "2026-10-01, 9:00:00 a.m.", "admin@fleetr.ai"], 1, { marginTop: "16px" }));
+}
+
+function skHst() {
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, skT("HST on statements")),
+    h("p", { className: "muted sectionSub" }, skT("Statements are issued by fleetr Inc. HST is added to the amount owed only while it is on.")),
+    h("div", null,
+      h("label", { style: { display: "inline-flex", gap: "8px", alignItems: "center", marginBottom: "12px" } },
+        h("input", { type: "checkbox", tabIndex: -1 }), skT("Show an HST line on statements")),
+      h("div", { className: "detailGrid" },
+        h("div", { className: "detailField" }, h("label", { className: "loginLabel" }, skT("fleetr's HST number")), h("input", { className: "loginInput", tabIndex: -1, readOnly: true })),
+        h("div", { className: "detailField" }, h("label", { className: "loginLabel" }, skT("HST rate (%)")), h("input", { className: "loginInput", tabIndex: -1, readOnly: true }))),
+      h("div", { className: "saveRow" }, skB("button", "primaryBtn", "Save"))));
+}
+
+function skBillingControls() {
+  return h("div", { className: "saveRow", style: { marginBottom: "16px" } },
+    h("label", { className: "loginLabel", style: { margin: 0 } }, skT("Month")),
+    h("input", { type: "month", className: "loginInput", style: { maxWidth: "200px" }, tabIndex: -1, readOnly: true }),
+    h("button", { type: "button", tabIndex: -1, className: "linkBtn" }, skT("Export CSV")));
+}
+
+function skBillingCard() {
+  return h("div", { className: "card" },
+    h("p", { className: "muted", style: { marginTop: 0 } }, skT("September 2026. Due 2026-10-15.")),
+    skTable(["Company", "Rentals closed", "Revenue", "%", "Amount owed", "Status"],
+      [skNames.map((n) => h("a", null, skT(n))), "12", "$4,250.00", "5%", "$212.50", skB("span", "pill pill--setup", "Unpaid")]));
+}
+
+function skBillingCompany(back) {
+  return h(React.Fragment, null, back,
+    h("h1", { className: "pageTitle" }, skT("Avalon Rentals, October 2026")),
+    h("div", { className: "card" },
+      h("p", { style: { marginTop: 0 } }, skT("12 rentals closed, $4,250.00 revenue at 5%: $212.50 owed, due 2026-11-15.")),
+      h("p", { className: "muted" }, skT("This month can be marked paid once it has ended."))),
+    h("div", { className: "card" }, skTable(["Closed", "Reservation", "Branch", "Class", "Revenue", "%", "Owed", "Flags"],
+      ["2026-10-04", "ABC 123 456", "Airport", "Small car", "$320.00", "5%", "$16.00", ""], 5)));
+}
+
+function skDashboard() {
+  return h(React.Fragment, null,
+    h("p", { className: "muted", style: { marginTop: 0 } }, skT("October 2026 so far, in Newfoundland time.")),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px", marginBottom: "16px" } },
+      [["fleetr revenue owed", "$0.00", "+0% on last month"], ["Collected", "$0.00", "Last month: $0.00 of $0.00"], ["Outstanding", "$0.00", "Unpaid on months that have ended"],
+        ["Rental revenue processed", "$0.00", "+0% on last month"], ["Effective take rate", "0%", "fleetr revenue over rental revenue processed"],
+        ["Vehicles under management", "0", "+0% on last month"], ["Active companies", "0", "Launched, not paused or suspended"], ["Rentals closed", "0", "Last month: 0"]]
+        .map(([label, value, sub]) => h("div", { key: label, className: "card", style: { margin: 0 } },
+          h("div", { className: "muted", style: { fontSize: "0.85rem" } }, skT(label)),
+          h("div", { style: { fontSize: "1.6rem", fontWeight: 700, margin: "4px 0" } }, skT(value)),
+          h("div", { className: "muted", style: { fontSize: "0.8rem" } }, skT(sub))))),
+    ["fleetr revenue by month: owed (light), collected (dark)", "Rental revenue processed by month", "Vehicles under management by month", "Rentals closed by month"]
+      .map((label) => h("div", { key: label, className: "card" }, h("figure", { style: { margin: 0 } },
+        h("figcaption", { className: "muted", style: { fontSize: "0.85rem", marginBottom: "6px" } }, skT(label)),
+        h("svg", { viewBox: "0 0 640 202", width: "100%", className: "skelBox", style: { borderRadius: "10px" } })))));
+}
+
+function skTexts() {
+  return h(React.Fragment, null,
+    h("p", { className: "muted textsIntro" }, skT("The texts every company's customers receive. The placeholders fill in for each company, branch and customer: [first name], [company], [location], [date], [time]. Each text's reservation code and links can be placed in the wording too, with the buttons under its name; one left out is added at the end, labelled, so it is never lost. The footer is always added last and cannot be edited. The previews use a made-up customer at a made-up company.")),
+    TEXT_KINDS.map((k) => h("section", { key: k.kind, className: "detailSection" },
+      h("h2", { className: "sectionTitle" }, skT(k.title)),
+      h("p", { className: "muted textWhen" }, skT(k.when)),
+      h("div", { className: "textInserts" },
+        [...TEXT_PLACEHOLDERS, ...(k.extra || [])].map(([label]) => skB("button", "chipBtn", `+ ${label}`, label)),
+        k.parts.map((p) => skB("button", "chipBtn chipBtn--part", `+ ${p.label}`, p.label))),
+      h("textarea", { className: "loginInput textBox", rows: 3, tabIndex: -1, readOnly: true }),
+      h("div", { className: "muted textCount" }, skT(`0 of ${TEXT_MAX} characters of wording`)),
+      h("div", { className: "textPreviewLabel" }, skT("What a customer receives")),
+      skB("div", "textPreview", "Hi Alex, your Avalon Rentals reservation is confirmed for Oct 6 at 10:00 AM at 40 Harbour Dr. Reservation code: ABC 123 456. App: https://app.fleetr.ai\nFrom Avalon Rentals via fleetr. Reply STOP to opt out."),
+      h("div", { className: "textMeasure" },
+        skB("span", "textChip", "1 message part"),
+        h("span", { className: "muted" }, skT("150 characters, plus the footer. 160 fit in one part; a longer company name, branch or customer name adds to this."))),
+      h("div", { className: "saveRow", style: { marginTop: "12px" } }, skB("button", "primaryBtn", "Save")))));
 }
 
 // ─── Screens ──────────────────────────────────────────────────────────────────
@@ -628,8 +814,8 @@ function SetupProgress({ id }) {
     return () => { live = false; };
   }, [id]);
 
+  if (state === undefined) return h(SkeletonFrame, null, skSetup());
   const body = () => {
-    if (state === undefined) return h(Skeleton, { lines: 4 });
     if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
     const s = state.setup;
     const required = s.items.filter((i) => i.required);
@@ -741,7 +927,7 @@ function CompanyStaff({ id, company, onChanged }) {
   };
 
   const body = () => {
-    if (state === undefined) return h(Skeleton, { lines: 3 });
+    if (state === undefined) return h(SkeletonFrame, null, skStaff());
     if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
     const { staff, branches } = state;
     const branchName = (s) => (s.role === "Exec" ? "All branches"
@@ -924,7 +1110,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
   const back = h("nav", { className: "crumbs", "aria-label": "Breadcrumb" },
     h("a", { href: "#/" }, "Companies"), h(Icon, { name: "chevron", size: 14 }),
     h("span", { "aria-current": "page" }, loaded && loaded.company ? loaded.company.name : "Company"));
-  if (loaded === undefined) return h(React.Fragment, null, back, h("div", { className: "card" }, h(Skeleton, { lines: 2 })), h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
+  if (loaded === undefined) return h(React.Fragment, null, back, h(SkeletonFrame, null, skCompany(null)));
   if (loaded.error) {
     return h(React.Fragment, null, back,
       h("h1", { className: "pageTitle" }, "Company"),
@@ -1141,7 +1327,7 @@ function RevenueShare({ id, onChanged }) {
       load(); onChanged && onChanged();
     });
   };
-  if (history === undefined) return h("div", { className: "card" }, h(Skeleton, { lines: 3 }));
+  if (history === undefined) return h(SkeletonFrame, null, skRevenue());
   if (history.error) return h("div", { className: "loginError", role: "alert" }, history.error);
   const now = history[0];
   return h("section", { className: "detailSection" },
@@ -1183,7 +1369,7 @@ function HstSettings() {
       setDraft({ hstOn: !!r.body.settings.hstOn, hstNumber: r.body.settings.hstNumber || "", hstRate: String(r.body.settings.hstRate ?? 15) });
     });
   }, []);
-  if (s === undefined) return h("div", { className: "card" }, h(Skeleton, { lines: 2 }));
+  if (s === undefined) return h(SkeletonFrame, null, skHst());
   if (s.error) return h("div", { className: "loginError", role: "alert" }, s.error);
   const save = (e) => {
     e.preventDefault();
@@ -1242,7 +1428,7 @@ function BillingScreen() {
       h("input", { id: "billing-month", type: "month", className: "loginInput", style: { maxWidth: "200px" }, value: month, max: thisMonth(),
         onChange: (e) => e.target.value && setMonth(e.target.value) }),
       h("button", { type: "button", className: "linkBtn", disabled: !rows.length, onClick: exportCsv }, "Export CSV")),
-    data === undefined ? h("div", { className: "card" }, h(Skeleton, { lines: 4 }))
+    data === undefined ? h(SkeletonFrame, null, skBillingCard())
     : data.error ? h("div", { className: "loginError", role: "alert" }, data.error)
     : h("div", { className: "card" },
         h("p", { className: "muted", style: { marginTop: 0 } }, `${monthLabel(month)}. Due ${data.dueDate}.`),
@@ -1273,7 +1459,7 @@ function BillingCompanyScreen({ id, month }) {
   const back = h("nav", { className: "crumbs", "aria-label": "Breadcrumb" },
     h("a", { href: "#/billing" }, "Billing"), h(Icon, { name: "chevron", size: 14 }),
     h("span", { "aria-current": "page" }, data && data.summary ? `${data.summary.company}, ${monthLabel(month)}` : monthLabel(month)));
-  if (data === undefined) return h(React.Fragment, null, back, h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
+  if (data === undefined) return h(React.Fragment, null, back, h(SkeletonFrame, null, skBillingCompany(null)));
   if (data.error) return h(React.Fragment, null, back, h("div", { className: "loginError", role: "alert" }, data.error));
   const sm = data.summary;
   const markPaid = (e) => {
@@ -1343,7 +1529,7 @@ function DashboardScreen() {
   const [d, setD] = React.useState(undefined);
   React.useEffect(() => { adminRequest("/admin/dashboard?months=12").then((r) => setD(r.ok ? r.body : { error: r.message })); }, []);
   const title = h("h1", { className: "pageTitle" }, "Dashboard");
-  if (d === undefined) return h(React.Fragment, null, title, h("div", { className: "card" }, h(Skeleton, { lines: 5 })));
+  if (d === undefined) return h(React.Fragment, null, title, h(SkeletonFrame, null, skDashboard()));
   if (d.error) return h(React.Fragment, null, title, h("div", { className: "loginError", role: "alert" }, d.error));
   const ms = d.months, cur = ms[ms.length - 1], prev = ms[ms.length - 2] || {};
   const change = (pct) => (pct == null ? "No change to compare" : `${pct > 0 ? "+" : ""}${pct}% on last month`);
@@ -1488,7 +1674,7 @@ function CustomerTextsScreen() {
     return () => { leaveGuard = null; };
   }, [unsaved]);
 
-  if (saved === undefined) return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"), h("div", { className: "card" }, h(Skeleton, { lines: 4 })));
+  if (saved === undefined) return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"), h(SkeletonFrame, null, skTexts()));
   if (saved.error) {
     return h(React.Fragment, null, h("h1", { className: "pageTitle" }, "Customer texts"),
       h("div", { className: "loginError", role: "alert" }, saved.error));
@@ -1594,7 +1780,7 @@ const NAV = [
   { key: "texts", label: "Customer texts", href: "#/texts", icon: "texts" },
 ];
 
-function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }) {
+function SignedInShell({ loading, companies, onCreated, onUpdated, onDeleted, onSignOut }) {
   const route = useHashRoute();
   const [menu, setMenu] = React.useState(false);
   const signOut = () => {
@@ -1636,6 +1822,7 @@ function SignedInShell({ companies, onCreated, onUpdated, onDeleted, onSignOut }
 
     h("main", { className: "main" },
       h("div", { className: "main__inner" },
+        loading ? h(SkeletonFrame, null, (SK_SCREENS[route.name] || SK_SCREENS.list)()) :
         route.name === "texts" ? h(CustomerTextsScreen) :
         route.name === "dashboard" ? h(DashboardScreen) :
         route.name === "billing" ? h(BillingScreen) :
@@ -1674,7 +1861,9 @@ function App() {
     setCompanies(null);
   };
 
-  if (companies === undefined) return h("div", { className: "loginWrap muted" }, "Loading…");
+  // While a stored session is checked: the signed-in screens, their content
+  // as its skeleton. Signed out, the check is instant and shows nothing.
+  if (companies === undefined) return supabase.auth.session() ? h(SignedInShell, { loading: true, onSignOut: signOut }) : null;
   if (companies === null) {
     return h(LoginScreen, { onSuccess: (list) => { setNotice(""); setCompanies(list); }, notice });
   }
@@ -2044,18 +2233,32 @@ select.loginInput{appearance:auto}
 .toast__close{border:0;background:none;color:rgba(249,249,247,0.6);cursor:pointer;display:grid;place-items:center;padding:4px;border-radius:6px}
 .toast__close:hover{color:#F9F9F7;background:rgba(249,249,247,0.1)}
 
-/* Skeleton: the website's sheen. */
-.skel{display:flex;flex-direction:column;gap:12px}
-.sk{position:relative;overflow:hidden;background:var(--ink-06);border-radius:8px}
-.sk::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(249,249,247,0.8),transparent);animation:shimmer 1.4s ease-in-out infinite}
-.sk--title{height:22px;width:40%}
-.sk--row{height:44px;border-radius:10px}
-@keyframes shimmer{to{transform:translateX(100%)}}
+/* Loading skeletons: the screen's own elements, its words and boxes as blocks
+   in #EDEBE6 on the white, rounded like what they stand for, under one soft
+   sheen. Unseen for the first 150ms (SkeletonFrame). */
+.skelPage{visibility:hidden}
+.skelPage--shown{visibility:visible}
+.skelPage__body{display:contents}
+.skelSr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skelText,.skelBox,
+.skelPage :is(input,select,textarea,.searchBox,.chip,.statTile,.tabs,.progress__bar){
+  background:#EDEBE6 linear-gradient(100deg,rgba(249,249,247,0) 30%,rgba(249,249,247,0.75) 50%,rgba(249,249,247,0) 70%) no-repeat!important;
+  background-size:200% 100%!important;animation:skelSheen 1.6s ease-in-out infinite;
+  color:transparent!important;border-color:transparent!important;box-shadow:none!important}
+@keyframes skelSheen{from{background-position:150% 0}to{background-position:-50% 0}}
+.skelText{border-radius:6px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+.skelBox *,.skelBox::before,.skelBox::after{visibility:hidden}
+.skelPage ::placeholder{color:transparent}
+.skelPage :is(.searchBox,.chip,.statTile,.tabs,.crumbs,.rowChevron) svg,.skelPage .crumbs > svg,.skelPage td > svg{visibility:hidden}
+.skelPage .tab--on{background:var(--card)!important}
+.skelPage .tab{color:transparent}
+.skelPage .chip__count{background:transparent}
+@media (prefers-reduced-motion:reduce){.skelText,.skelBox,.skelPage :is(input,select,textarea,.searchBox,.chip,.statTile,.tabs,.progress__bar){animation:none}}
 
 /* Customer texts: the preview as a message bubble on a phone-coloured strip. */
 .textPreview{background:#E9E9EB;border:0;border-radius:18px 18px 18px 6px;color:var(--text)}
 @media (prefers-reduced-motion:reduce){
-  .sk::after,.toast,.dialog,.dialogBackdrop{animation:none}
+  .toast,.dialog,.dialogBackdrop{animation:none}
   .motionBtn__fill,.progress__bar span{transition:none}
 }
 `;
