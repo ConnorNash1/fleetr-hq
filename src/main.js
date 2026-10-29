@@ -233,7 +233,7 @@ function SkeletonFrame({ children }) {
     h("div", { className: "skelPage__body", "aria-hidden": "true", inert: "" }, children));
 }
 
-const skTable = (cols, cells, rows = SKEL_ROWS, style) => h("table", { className: "companyTable", style },
+const skTable = (cols, cells, rows = SKEL_ROWS, style, className = "companyTable") => h("table", { className, style },
   h("thead", null, h("tr", null, cols.map((c, i) => h("th", { key: i, scope: "col" }, c ? skT(c) : null)))),
   h("tbody", null, skRows(rows, (r) => h("tr", { key: r }, cells.map((c, i) => {
     const v = Array.isArray(c) ? c[r % c.length] : c;
@@ -304,9 +304,9 @@ function skSetup() {
 }
 
 function skStaff() {
-  return h("div", { className: "tableWrap" }, skTable(["Name", "Email", "Role", "Branch", "Status", "Signed up", ""],
+  return skTable(["Name", "Email", "Role", "Branch", "Status", "Signed up", ""],
     [h("div", { className: "nameCell" }, skB("span", "avatar", "AM"), h("div", null, skT("Alex Morgan"), h("div", { className: "muted small" }, skT("amorgan")))),
-      "alex@example.com", ["Exec", "Agent"], ["All branches", "Airport"], skB("span", "pill pill--live", "Approved"), "Oct 29, 2026", ""], 3));
+      "alex@example.com", ["Exec", "Agent"], ["All branches", "Airport"], skB("span", "pill pill--live", "Approved"), "Oct 29, 2026", ""], 3, undefined, "companyTable staffTable");
 }
 
 function skRevenue() {
@@ -477,26 +477,88 @@ async function createCompany(name) {
 // Two routes, so a hash listener rather than react-router. Hash-based for the
 // same reason internal uses HashRouter: GitHub Pages serves one file and would
 // 404 on any real path.
+// ─── In-app dialog ────────────────────────────────────────────────────────────
+// Every message and question HQ used to raise with the browser's alert and
+// confirm, as the staff app shows them. One host, rendered at the root, shows
+// them one at a time; each helper returns a promise for the answer.
+//   appAlert(message, { title })                        resolves when OK is pressed
+//   appConfirm({ title, message, confirmLabel, danger })  resolves true or false
+// danger gives the main button the dark red that destructive actions use.
+let showDialogInHost = null;
+const dialogQueue = [];
+function showDialog(opts) {
+  return new Promise((resolve) => {
+    dialogQueue.push({ ...opts, resolve });
+    if (showDialogInHost) showDialogInHost();
+  });
+}
+const appAlert = (message, { title } = {}) => showDialog({ kind: "alert", title: title || "Heads up", message, confirmLabel: "OK" });
+const appConfirm = ({ title, message, confirmLabel, danger }) =>
+  showDialog({ kind: "confirm", title, message, confirmLabel: confirmLabel || "Continue", danger });
+
+function AppDialogHost() {
+  const [current, setCurrent] = React.useState(null);
+  const mainRef = React.useRef(null);
+  React.useEffect(() => {
+    showDialogInHost = () => setCurrent((c) => (c || !dialogQueue.length ? c : dialogQueue.shift()));
+    showDialogInHost();
+    return () => { showDialogInHost = null; };
+  }, []);
+  React.useEffect(() => { if (current && mainRef.current) mainRef.current.focus(); }, [current]);
+  if (!current) return null;
+  const close = (answer) => {
+    current.resolve(answer);
+    setCurrent(null);
+    setTimeout(() => showDialogInHost && showDialogInHost(), 0);
+  };
+  const cancel = () => close(current.kind === "confirm" ? false : undefined);
+  const ok = () => close(current.kind === "confirm" ? true : undefined);
+  return h("div", { className: "appDialogBackdrop", onClick: cancel },
+    h("form", {
+      className: "appDialog", role: current.kind === "alert" ? "alertdialog" : "dialog", "aria-modal": "true",
+      "aria-labelledby": "appDialogTitle",
+      onClick: (e) => e.stopPropagation(),
+      onKeyDown: (e) => { if (e.key === "Escape") { e.stopPropagation(); cancel(); } },
+      onSubmit: (e) => { e.preventDefault(); ok(); },
+    },
+      h("h2", { id: "appDialogTitle", className: "appDialog__title" }, current.title),
+      current.message && h("p", { className: "appDialog__message" }, current.message),
+      h("div", { className: "appDialog__actions" },
+        current.kind !== "alert" && h("button", { type: "button", className: "appDialog__cancel", onClick: cancel }, "Cancel"),
+        h("button", { ref: mainRef, type: "submit", className: `appDialog__main${current.danger ? " appDialog__main--danger" : ""}` },
+          current.confirmLabel))));
+}
+
 // Set by a screen holding unsaved changes: returns the warning to show before
-// leaving it, or null when there is nothing to lose.
+// leaving it, or null when there is nothing to lose. Resolves true to leave.
 let leaveGuard = null;
 const confirmLeave = () => {
   const msg = leaveGuard && leaveGuard();
-  return !msg || window.confirm(msg);
+  return msg ? appConfirm({ title: "Leave without saving?", message: msg, confirmLabel: "Leave" }) : Promise.resolve(true);
 };
 
 function useHashRoute() {
   const [hash, setHash] = React.useState(window.location.hash);
   React.useEffect(() => {
     let current = window.location.hash;
+    // Set while a move the person agreed to is being made, so it is not asked again.
+    let agreed = false;
     const onChange = () => {
-      // Cancelled: put the address back without firing another hashchange.
-      if (!confirmLeave()) {
-        history.replaceState(null, "", current || window.location.pathname + window.location.search);
+      const target = window.location.hash;
+      if (agreed || !(leaveGuard && leaveGuard())) {
+        agreed = false;
+        current = target;
+        setHash(current);
         return;
       }
-      current = window.location.hash;
-      setHash(current);
+      // Asked first: the address goes back while the question is up, without
+      // firing another hashchange, and moves on only if they leave.
+      history.replaceState(null, "", current || window.location.pathname + window.location.search);
+      confirmLeave().then((leave) => {
+        if (!leave) return;
+        agreed = true;
+        window.location.hash = target;
+      });
     };
     window.addEventListener("hashchange", onChange);
     return () => window.removeEventListener("hashchange", onChange);
@@ -858,7 +920,6 @@ function FirstBranchForm({ id, onOpened }) {
     e.preventDefault();
     const nm = name.trim();
     if (!nm) { setErr("Enter a branch name."); return; }
-    if (!window.confirm(`Open ${nm} as this company's first branch? People who sign up with the join code will join it.`)) return;
     setBusy(true);
     setErr("");
     adminRequest(`/admin/companies/${encodeURIComponent(id)}/branch`, { method: "POST", body: { name: nm } })
@@ -883,7 +944,7 @@ const signedUpOn = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, {
 
 // Read only, apart from approving or declining a pending sign-up. HQ approves
 // only the company's first Exec; once it has one, the Exec approves the rest.
-function CompanyStaff({ id, company, onChanged }) {
+function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
   const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { staff, branches }
   const [busyId, setBusyId] = React.useState(null);
   const [actErr, setActErr] = React.useState("");
@@ -901,14 +962,23 @@ function CompanyStaff({ id, company, onChanged }) {
 
   const refresh = () => { setReload((n) => n + 1); onChanged(); };
 
-  const act = (person, approve) => {
-    const who = `${person.name} (${person.username})`;
-    const contact = [company.contactName, company.contactEmail].filter(Boolean).join(", ");
-    const msg = approve
-      ? `Approve ${who} as ${company.name}'s Exec? They will be able to run the whole company in fleetr and approve its staff.`
-        + (contact ? ` The company contact on record is ${contact}.` : " This company has no contact on record to check them against.")
-      : `Decline ${who}? Their account is removed and they cannot sign in.`;
-    if (!window.confirm(msg)) return;
+  // Whether the company has a revenue share: its first Exec cannot be
+  // approved until it does. undefined until known, so approving waits too.
+  const [hasShare, setHasShare] = React.useState(undefined);
+  React.useEffect(() => {
+    let live = true;
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/revenue-share`).then((r) => {
+      if (live) setHasShare(r.ok ? (r.body.history || []).length > 0 : false);
+    });
+    return () => { live = false; };
+  }, [id, reload]);
+
+  const act = async (person, approve) => {
+    if (approve && !hasShare) return;
+    if (!approve && !(await appConfirm({
+      title: `Decline ${person.name}?`, message: `${person.name} (${person.username}) is removed and cannot sign in.`,
+      confirmLabel: "Decline", danger: true,
+    }))) return;
     setBusyId(person.id);
     setActErr("");
     setActMsg("");
@@ -937,8 +1007,11 @@ function CompanyStaff({ id, company, onChanged }) {
       branches.length === 0 && h(FirstBranchForm, { id, onOpened: refresh }),
       staff.length === 0
         ? h("p", { className: "muted" }, branches.length === 0 ? "No staff yet." : "No staff yet. The first person to sign up with the join code appears here.")
-        : h("div", { className: "tableWrap" },
-            h("table", { className: "companyTable" },
+        : h(React.Fragment, null,
+          !hasExec && hasShare === false && staff.some((s) => s.pendingApprovalSince) && h("div", { className: "loginError", role: "status" },
+            "Set this company's revenue share before approving its first Exec. ",
+            h("button", { type: "button", className: "linkBtn", onClick: onSetRevenueShare }, "Set the revenue share")),
+          h("table", { className: "companyTable staffTable" },
               h("thead", null,
                 h("tr", null,
                   ["Name", "Email", "Role", "Branch", "Status", "Signed up", ""].map((c, i) =>
@@ -947,16 +1020,17 @@ function CompanyStaff({ id, company, onChanged }) {
                 staff.map((s) => {
                   const pending = !!s.pendingApprovalSince;
                   return h("tr", { key: s.id },
-                    h("td", null, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
+                    h("td", { "data-label": "Name" }, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
                       h("div", null, s.name, h("div", { className: "muted small" }, s.username)))),
-                    h("td", null, s.recoveryEmail || h("span", { className: "muted" }, "None")),
-                    h("td", null, s.role),
-                    h("td", null, branchName(s)),
-                    h("td", null, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
+                    h("td", { "data-label": "Email" }, s.recoveryEmail || h("span", { className: "muted" }, "None")),
+                    h("td", { "data-label": "Role" }, s.role),
+                    h("td", { "data-label": "Branch" }, branchName(s)),
+                    h("td", { "data-label": "Status" }, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
                       pending ? "Pending" : s.active ? "Approved" : "Deactivated")),
-                    h("td", null, signedUpOn(s.createdAt)),
-                    h("td", null, pending && h("div", { className: "staffActions" },
-                      !hasExec && h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
+                    h("td", { "data-label": "Signed up" }, signedUpOn(s.createdAt)),
+                    h("td", { "data-label": "" }, pending && h("div", { className: "staffActions" },
+                      !hasExec && h("button", { type: "button", className: "primaryBtn staffApprove", disabled: busyId !== null || !hasShare,
+                        title: hasShare === false ? "Set the revenue share first" : undefined,
                         onClick: () => act(s, true) }, busyId === s.id ? "Working…" : "Approve as Exec"),
                       h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
                         onClick: () => act(s, false) }, "Decline"))));
@@ -1026,10 +1100,11 @@ function DeleteCompany({ id, company, onDeleted }) {
     setBusy(true);
     setErr("");
     adminRequest(`/admin/companies/${encodeURIComponent(id)}`, { method: "DELETE", body: { name: typed } })
-      .then((r) => {
+      .then(async (r) => {
         if (!r.ok) { setErr(r.message); return; }
         if (r.body.filesLeft) {
-          window.alert(`${company.name} was deleted, but ${r.body.filesLeft} files could not be removed. Delete it again from the same address to remove them.`);
+          await appAlert(`${company.name} was deleted, but ${r.body.filesLeft} files could not be removed. Delete it again from the same address to remove them.`,
+            { title: "Some files were left" });
         }
         onDeleted(id);
       })
@@ -1252,7 +1327,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
 
     tab === "setup" && h(SetupProgress, { key: setupKey, id }),
 
-    tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1) }),
+    tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1), onSetRevenueShare: () => setTab("billing") }),
 
     tab === "features" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
@@ -1783,8 +1858,8 @@ const NAV = [
 function SignedInShell({ loading, companies, onCreated, onUpdated, onDeleted, onSignOut }) {
   const route = useHashRoute();
   const [menu, setMenu] = React.useState(false);
-  const signOut = () => {
-    if (!confirmLeave()) return;
+  const signOut = async () => {
+    if (!(await confirmLeave())) return;
     leaveGuard = null;
     // So the next sign-in starts on the list, not on whichever company was open.
     if (window.location.hash) window.location.hash = "";
@@ -1911,7 +1986,22 @@ const css = `
 .setupItem{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--border)}
 .setupDone,.setupLeft{flex:0 0 44px;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
 .setupLeft{color:var(--muted)}
-.staffActions{display:flex;gap:14px;flex-wrap:wrap;white-space:nowrap}
+.staffActions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;white-space:nowrap}
+/* A company's staff: as wide as its card and no wider. Long names and
+   addresses wrap; on a narrow screen each person is a card of label, value. */
+.staffTable td{overflow-wrap:anywhere}
+.staffApprove{padding:8px 14px;border-radius:10px;font-size:0.85rem}
+@media (max-width:720px){
+  .staffTable thead{display:none}
+  .staffTable,.staffTable tbody,.staffTable tr,.staffTable td{display:block;width:100%}
+  .staffTable tr{padding:10px 0;border-bottom:1px solid var(--border)}
+  .staffTable tbody tr:last-child{border-bottom:0}
+  .staffTable td{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;border-bottom:0;text-align:right}
+  .staffTable td::before{content:attr(data-label);flex:none;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);text-align:left}
+  .staffTable td[data-label=""]{justify-content:flex-start}
+  .staffTable td[data-label=""]::before{display:none}
+  .staffTable td:empty{display:none}
+}
 
 .loginWrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:24px}
 /* The sign-in page, as the staff app draws its own: the same card, wordmark,
@@ -2045,9 +2135,11 @@ html{scrollbar-gutter:stable}
 /* Sidebar, as the staff app's: dark, terracotta tint on the current page. */
 .side{position:sticky;top:0;height:100vh;width:236px;flex:none;display:flex;flex-direction:column;
   background:#1F1E1D;color:#F9F9F7;padding:20px 14px}
-.side__brand{padding:4px 10px 22px}
+.side__brand{padding:4px 13px 22px}
 .side .wordmark{color:#F9F9F7;font-size:1.6rem}
-.side .wordmarkLogo{height:24px;width:calc(24px * 4059 / 729)}
+/* A whole number of pixels wide, so no edge of the car is lost to rounding;
+   the left edge lines up with the menu icons below (3px border, 10px padding). */
+.side .wordmarkLogo{height:24px;width:134px;object-fit:contain;object-position:left center}
 .side .wordmarkHq{color:rgba(249,249,247,0.55)}
 .side__label{font-size:0.68rem;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:rgba(249,249,247,0.45);padding:0 10px 8px}
 .side__nav{display:flex;flex-direction:column;gap:2px}
@@ -2236,6 +2328,20 @@ html{scrollbar-gutter:stable}
 .toast__close{border:0;background:none;color:rgba(249,249,247,0.6);cursor:pointer;display:grid;place-items:center;padding:4px;border-radius:6px}
 .toast__close:hover{color:#F9F9F7;background:rgba(249,249,247,0.1)}
 
+/* The in-app dialog, in place of the browser's alert and confirm: the staff app's. */
+.appDialogBackdrop{position:fixed;inset:0;z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(31,30,29,0.45)}
+.appDialog{width:100%;max-width:420px;padding:24px;background:#F9F9F7;color:#1F1E1D;font-family:'Inter',sans-serif;border-radius:16px;box-shadow:0 20px 60px rgba(31,30,29,0.25)}
+.appDialog__title{margin:0 0 8px;font-size:18px;font-weight:700;line-height:1.3}
+.appDialog__message{margin:0;font-size:15px;line-height:1.55;color:#3B3A37;white-space:pre-line}
+.appDialog__actions{display:flex;justify-content:flex-end;gap:10px;margin-top:22px}
+.appDialog__cancel,.appDialog__main{border-radius:10px;padding:11px 18px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer}
+.appDialog__cancel{border:1px solid #E3E2DE;background:transparent;color:#1F1E1D}
+.appDialog__cancel:hover{background:rgba(244,132,95,0.14);border-color:#F4845F}
+.appDialog__main{border:none;background:#F4845F;color:#1F1E1D}
+.appDialog__main:hover{background:#E06D47}
+.appDialog__main--danger{background:#A3271B;color:#F9F9F7}
+.appDialog__main--danger:hover{background:#8A2016}
+
 /* Loading skeletons: the screen's own elements, its words and boxes as blocks
    in #EDEBE6 on the white, rounded like what they stand for, under one soft
    sheen. Unseen for the first 150ms (SkeletonFrame). */
@@ -2269,4 +2375,4 @@ const style = document.createElement("style");
 style.textContent = css;
 document.head.appendChild(style);
 
-ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+ReactDOM.createRoot(document.getElementById("root")).render(h(React.Fragment, null, h(App), h(AppDialogHost)));
