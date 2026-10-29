@@ -2036,6 +2036,9 @@ select.loginInput{appearance:auto}
   --shadow-lg:0 2px 4px rgba(31,30,29,0.06),0 18px 48px rgba(31,30,29,0.16)}
 .small{font-size:0.8rem}
 .shell{min-height:100%;display:flex}
+/* The page scrolls: room for its scrollbar kept either way, so the width does
+   not change as it comes and goes. */
+html{scrollbar-gutter:stable}
 .main{flex:1;min-width:0}
 .main__inner{max-width:1080px;margin:0 auto;padding:32px 32px 64px}
 
