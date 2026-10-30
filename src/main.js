@@ -822,7 +822,7 @@ const SETUP_ITEMS = {
   vehicle_classes:       "Vehicle classes",
   rates:                 "A daily rate for every vehicle class",
   vehicles:              "A vehicle at the default branch",
-  protection:            "Protection and deductibles",
+  protection:            "Protections and Deductibles",
   contract:              "Contract terms",
   revenue_share:         "Revenue share, set by fleetr",
   listing:               "fleetr.ai listing",
