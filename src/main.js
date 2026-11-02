@@ -408,12 +408,20 @@ function LoginScreen({ onSuccess, notice }) {
   const [email,    setEmail]    = React.useState("");
   const [password, setPassword] = React.useState("");
   const [error,    setError]    = React.useState(notice || "");
+  // The field an error is under: "email", "password", or "" for the form.
+  const [errorAt,  setErrorAt]  = React.useState("");
   const [loading,  setLoading]  = React.useState(false);
+  const passwordRef = React.useRef(null);
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    // Said under the field, in place of the browser's own popups.
+    const say = (at, text) => { setError(text); setErrorAt(at); };
+    if (!email.trim()) { say("email", "Enter your email."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { say("email", "Enter a valid email address."); return; }
+    if (!password) { say("password", "Enter your password."); return; }
     setLoading(true);
-    setError("");
+    setError(""); setErrorAt("");
     signIn(email.trim().toLowerCase(), password)
       .then((result) => {
         if (result.ok) { onSuccess(result.companies); return; }
@@ -430,20 +438,25 @@ function LoginScreen({ onSuccess, notice }) {
       h("h1", { className: "hqSignIn__brand", "aria-label": "fleetr HQ" },
         h("img", { className: "wordmarkLogo hqSignIn__wordmark", src: "./fleetr-logo-terracotta-on-white.svg", alt: "", "aria-hidden": "true" }),
         h("span", { className: "hqSignIn__hq", "aria-hidden": "true" }, "HQ")),
-      h("form", { className: "hqSignIn__form", onSubmit: handleSubmit },
+      h("form", { className: "hqSignIn__form", onSubmit: handleSubmit, noValidate: true },
         h("input", {
-          id: "email", className: "hqSignIn__input", type: "email", required: true, placeholder: "Email",
-          "aria-label": "Email", autoComplete: "username", value: email,
+          id: "email", className: "hqSignIn__input", type: "email", placeholder: "Email",
+          "aria-label": "Email", autoComplete: "username", value: email, "aria-invalid": errorAt === "email" || undefined,
           onChange: (e) => { setEmail(e.target.value); setError(""); },
+          // Enter goes on to the password rather than signing in.
+          onKeyDown: (e) => { if (e.key === "Enter") { e.preventDefault(); if (passwordRef.current) passwordRef.current.focus(); } },
         }),
+        error && errorAt === "email" && h("div", { className: "hqSignIn__error hqSignIn__error--field", role: "alert" }, error),
         h("input", {
-          id: "password", className: "hqSignIn__input", type: "password", required: true, placeholder: "Password",
+          id: "password", ref: passwordRef, className: "hqSignIn__input", type: "password", placeholder: "Password",
           "aria-label": "Password", maxLength: PASSWORD_MAX, autoComplete: "current-password", value: password,
+          "aria-invalid": errorAt === "password" || undefined,
           onChange: (e) => { setPassword(e.target.value); setError(""); },
         }),
+        error && errorAt === "password" && h("div", { className: "hqSignIn__error hqSignIn__error--field", role: "alert" }, error),
         h("button", { type: "submit", className: "hqSignIn__btn", disabled: loading },
           loading ? "Signing in…" : "Sign in"),
-        error && h("div", { className: "hqSignIn__error", role: "alert" }, error))));
+        error && errorAt === "" && h("div", { className: "hqSignIn__error", role: "alert" }, error))));
 }
 
 // ─── Creating a company ───────────────────────────────────────────────────────
@@ -2022,6 +2035,8 @@ const css = `
 .hqSignIn__btn:hover:not(:disabled){background:#E06D47}
 .hqSignIn__btn:disabled{opacity:0.6;cursor:default}
 .hqSignIn__error{font-size:13px;color:#c0392b;text-align:center;font-weight:500}
+.hqSignIn__error--field{text-align:left;margin-top:-4px}
+.hqSignIn__input[aria-invalid="true"]{border-color:#c0392b}
 .loginForm{display:flex;flex-direction:column;text-align:left}
 .loginLabel{font-size:0.8rem;font-weight:600;margin:0 0 6px}
 .loginInput{font:inherit;color:var(--text);background:var(--card);padding:10px 12px;margin-bottom:16px;
@@ -2370,18 +2385,38 @@ html{scrollbar-gutter:stable}
   .toast,.dialog,.dialogBackdrop{animation:none}
   .motionBtn__fill,.progress__bar span{transition:none}
 }
-/* Checkboxes and radio buttons are terracotta, and a focus ring shows for the
-   keyboard only. A text field marks its focus with its border, because a
-   browser counts every click into one as :focus-visible. */
+/* Checkboxes and radio buttons are terracotta. A focus ring shows only on a
+   button, a link or a field, never on a card or anything else that holds
+   more, and only while the keyboard is moving around the page
+   (html[data-keys], set by Tab or an arrow key and cleared by a click or
+   tap). Cmd, Shift or Return alone never brings one back. A text field marks
+   its focus with its border, because a browser counts every click into one
+   as :focus-visible. */
 input[type="checkbox"], input[type="radio"]{ accent-color: #F4845F; }
 :focus:not(:focus-visible){ outline: none; }
-:focus-visible{ outline: 2px solid #F4845F; outline-offset: 2px; }
+:focus-visible{ outline: none; }
+html[data-keys] :is(button, a[href], input, select, textarea):focus-visible{ outline: 2px solid #F4845F; outline-offset: 2px; }
+html[data-keys] .statTile:focus-visible{ outline: none; }
+html:not([data-keys]) :focus-visible{ outline: none !important; }
 [tabindex="-1"]:focus-visible{ outline: none; }
+/* An autofilled field keeps our white and our text colour, not the
+   browser's light blue. */
+input:-webkit-autofill, textarea:-webkit-autofill, select:-webkit-autofill{
+  -webkit-box-shadow: 0 0 0 1000px #F9F9F7 inset; box-shadow: 0 0 0 1000px #F9F9F7 inset;
+  -webkit-text-fill-color: #1F1E1D; caret-color: #1F1E1D;
+}
+input:autofill, textarea:autofill, select:autofill{ box-shadow: 0 0 0 1000px #F9F9F7 inset; color: #1F1E1D; }
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([readonly]):focus,
 textarea:not([readonly]):focus{ outline: none; border-color: #F4845F; }
 `;
 const style = document.createElement("style");
 style.textContent = css;
 document.head.appendChild(style);
+
+// Focus rings are for moving around with the keyboard: Tab or an arrow key
+// turns them on, a click or tap turns them off.
+const FOCUS_KEYS = ["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"];
+document.addEventListener("keydown", (e) => { if (FOCUS_KEYS.includes(e.key)) document.documentElement.setAttribute("data-keys", ""); }, true);
+document.addEventListener("pointerdown", () => document.documentElement.removeAttribute("data-keys"), true);
 
 ReactDOM.createRoot(document.getElementById("root")).render(h(React.Fragment, null, h(App), h(AppDialogHost)));
