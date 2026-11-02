@@ -278,10 +278,7 @@ function skCompany(back) {
       h("div", { className: "hero__main" },
         h("h1", { className: "pageTitle hero__name" }, skT("Avalon Rentals")),
         h("div", { className: "hero__badges" }, skB("span", "badge badge-active", [h("span", { key: "d", className: "badge__dot" }), "Active"], 1), skB("span", "pill pill--live", "Live", 2)),
-        h("div", { className: "muted hero__contact" }, skT("Alex Morgan · alex@example.com · 709 555 0110"))),
-      h("div", { className: "hero__code" },
-        h("span", { className: "hero__codeLabel" }, skT("Join code")),
-        skB("div", "codeChip", [h("span", { key: "c" }, "ABCD2345"), h("span", { key: "b", className: "iconBtn" }, h(Icon, { name: "copy", size: 15 }))]))),
+        h("div", { className: "muted hero__contact" }, skT("Alex Morgan · alex@example.com · 709 555 0110")))),
     h("div", { className: "tabs" }, [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["billing", "Billing"], ["danger", "Danger zone"]].map(([key, label]) =>
       h("button", { key, type: "button", tabIndex: -1, className: `tab${key === "setup" ? " tab--on" : ""}${key === "danger" ? " tab--danger" : ""}` }, key === "setup" ? skT(label) : label))),
     skSetup());
@@ -460,10 +457,12 @@ function LoginScreen({ onSuccess, notice }) {
 }
 
 // ─── Creating a company ───────────────────────────────────────────────────────
-// Returns { ok, company } or { ok: false, message }. Never throws. The message
-// is the Worker's own when it sent one: it already words each refusal for a
-// person, and a second table of reasons here would only drift from it.
-async function createCompany(name) {
+// Returns { ok, company, branch } or { ok: false, message, field }. Never
+// throws. The message is the Worker's own when it sent one: it already words
+// each refusal for a person, and a second table of reasons here would only
+// drift from it. fields is the whole company: its contact, revenue share and
+// first branch with its address (hq_create_company, through the Worker).
+async function createCompany(fields) {
   const session = supabase.auth.session();
   if (!session) return { ok: false, message: "Your session has ended. Sign in again." };
   let res;
@@ -474,16 +473,16 @@ async function createCompany(name) {
         Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(fields),
     });
   } catch (e) {
     console.warn("fleetr hq create company failed:", e.message || String(e));
     return { ok: false, message: REASONS.network };
   }
   const body = await res.json().catch(() => null);
-  if (res.ok && body && body.ok && body.company) return { ok: true, company: body.company };
+  if (res.ok && body && body.ok && body.company) return { ok: true, company: body.company, branch: body.branch };
   console.warn("fleetr hq create company refused:", res.status);
-  return { ok: false, message: (body && body.message) || `Could not create the company (${res.status}).` };
+  return { ok: false, field: body && (body.field || body.reason), message: (body && body.message) || `Could not create the company (${res.status}).` };
 }
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
@@ -607,47 +606,105 @@ function setupStateLabel(c) {
   return "Live";
 }
 
-function NewCompanyForm({ onCreated, onCancel }) {
-  const [name,   setName]   = React.useState("");
-  const [error,  setError]  = React.useState("");
+// A branch's join code, with Copy. HQ sends it to the company's Exec, who
+// signs up with it.
+function JoinCodeChip({ code }) {
+  const copy = () => {
+    if (!code || !navigator.clipboard) return;
+    navigator.clipboard.writeText(code).then(() => toast("Join code copied."), () => {});
+  };
+  return h("div", { className: "codeChip" },
+    h("span", null, code || "None"),
+    code && h("button", { type: "button", className: "secondaryBtn codeChip__copy", onClick: copy },
+      h(Icon, { name: "copy", size: 15 }), "Copy"));
+}
+
+// New company: one form, the company, its contact, its revenue share and its
+// first branch with its address. A company never exists without a branch or a
+// revenue share. Once it is made, its branch's join code, to send to its Exec.
+const NEW_COMPANY_FIELDS = [
+  ["Company", [
+    ["name", "Company name", "text", 200, "organization"],
+    ["contactName", "Contact name", "text", 200, "name"],
+    ["contactEmail", "Contact email", "email", 254, "email"],
+    ["contactPhone", "Contact phone", "tel", 32, "tel"],
+    ["percent", "Revenue share (%)", "text", 5, "off"],
+  ]],
+  ["First branch", [
+    ["branchName", "Branch name", "text", 60, "off"],
+    ["street", "Street", "text", 200, "street-address"],
+    ["city", "City", "text", 100, "address-level2"],
+    ["province", "Province", "text", 100, "address-level1"],
+    ["postalCode", "Postal code", "text", 20, "postal-code"],
+    ["country", "Country", "text", 100, "country-name"],
+  ]],
+];
+function NewCompanyForm({ onCreated, onDone, onCancel }) {
+  const [form,   setForm]   = React.useState({ country: "Canada" });
+  const [error,  setError]  = React.useState({ field: "", text: "" });
   const [saving, setSaving] = React.useState(false);
+  const [made,   setMade]   = React.useState(null);   // { company, branch } once created
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) { setError("Enter a company name."); return; }
+    const fields = Object.fromEntries(NEW_COMPANY_FIELDS.flatMap(([, list]) => list).map(([k]) => [k, String(form[k] || "").trim()]));
+    const missing = NEW_COMPANY_FIELDS.flatMap(([, list]) => list).find(([k]) => !fields[k]);
+    if (missing) { setError({ field: missing[0], text: `Enter the ${missing[1].replace(/ \(%\)$/, "").toLowerCase()}.` }); return; }
+    const percent = Number(fields.percent.replace("%", ""));
+    if (!Number.isFinite(percent)) { setError({ field: "percent", text: "Enter a revenue share from 1 to 10%." }); return; }
     setSaving(true);
-    setError("");
-    createCompany(trimmed)
+    setError({ field: "", text: "" });
+    createCompany({ ...fields, percent })
       .then((result) => {
-        if (result.ok) { onCreated(result.company); return; }
-        setError(result.message);
+        if (result.ok) { setMade(result); onCreated(result.company); return; }
+        setError({ field: result.field && result.field !== "bad_company" ? String(result.field).replace(/^bad_/, "") : "", text: result.message });
       })
       .finally(() => setSaving(false));
   };
 
   // A dialog over the list. Escape or a click outside closes it.
+  const close = made ? () => onDone(made.company) : onCancel;
   React.useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape" && !saving) onCancel(); };
+    const onKey = (e) => { if (e.key === "Escape" && !saving) close(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [saving, onCancel]);
-  return h("div", { className: "dialogBackdrop", onMouseDown: (e) => { if (e.target === e.currentTarget && !saving) onCancel(); } },
-    h("form", { className: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "newCompanyTitle", onSubmit: handleSubmit },
-      h("div", { className: "dialog__head" },
-        h("h2", { id: "newCompanyTitle", className: "dialog__title" }, "New company"),
-        h("button", { type: "button", className: "iconBtn", "aria-label": "Close", onClick: onCancel, disabled: saving }, h(Icon, { name: "close" }))),
-      h("p", { className: "muted dialog__sub" }, "It starts in setup, with a join code and no branch. You open its first branch from its page."),
-      h("label", { className: "loginLabel", htmlFor: "newCompanyName" }, "Company name"),
-      h("input", {
-        id: "newCompanyName", className: "loginInput", type: "text", autoFocus: true,
-        maxLength: 200, value: name, disabled: saving,
-        onChange: (e) => { setName(e.target.value); setError(""); },
-      }),
-      error && h("div", { className: "loginError", role: "alert", style: { margin: "0 0 16px" } }, error),
-      h("div", { className: "dialog__actions" },
-        h("button", { type: "button", className: "secondaryBtn", onClick: onCancel, disabled: saving }, "Cancel"),
-        h("button", { type: "submit", className: "primaryBtn", disabled: saving }, saving ? "Creating…" : "Create company"))));
+  }, [saving, close]);
+  const fieldKeyOf = (k) => ({ name: "name", contact_name: "contactName", email: "contactEmail", phone: "contactPhone", percent: "percent",
+    branch_name: "branchName" }[k] || k);
+  const input = ([k, label, type, max, auto]) => h("div", { key: k, className: "detailField" },
+    h("label", { className: "loginLabel", htmlFor: `new-${k}` }, label),
+    h("input", {
+      id: `new-${k}`, className: "loginInput", type, maxLength: max, autoComplete: auto, value: form[k] || "", disabled: saving,
+      inputMode: k === "percent" ? "decimal" : undefined, autoFocus: k === "name",
+      "aria-invalid": fieldKeyOf(error.field) === k || undefined,
+      onChange: (e) => { const v = e.target.value; setForm((f) => ({ ...f, [k]: v })); setError({ field: "", text: "" }); },
+    }),
+    fieldKeyOf(error.field) === k && h("div", { className: "fieldError", role: "alert" }, error.text));
+
+  return h("div", { className: "dialogBackdrop", onMouseDown: (e) => { if (e.target === e.currentTarget && !saving) close(); } },
+    made
+      ? h("div", { className: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "newCompanyTitle" },
+          h("div", { className: "dialog__head" },
+            h("h2", { id: "newCompanyTitle", className: "dialog__title" }, `${made.company.name} was created`),
+            h("button", { type: "button", className: "iconBtn", "aria-label": "Close", onClick: close }, h(Icon, { name: "close" }))),
+          h("p", { className: "muted dialog__sub" }, `${made.branch.name}'s join code`),
+          h(JoinCodeChip, { code: made.branch.joinCode }),
+          h("p", null, "Send this code to the company's Exec to sign up."),
+          h("div", { className: "dialog__actions" },
+            h("button", { type: "button", className: "primaryBtn", onClick: close }, "Open company")))
+      : h("form", { className: "dialog dialog--wide", role: "dialog", "aria-modal": "true", "aria-labelledby": "newCompanyTitle", onSubmit: handleSubmit, noValidate: true },
+          h("div", { className: "dialog__head" },
+            h("h2", { id: "newCompanyTitle", className: "dialog__title" }, "New company"),
+            h("button", { type: "button", className: "iconBtn", "aria-label": "Close", onClick: onCancel, disabled: saving }, h(Icon, { name: "close" }))),
+          h("p", { className: "muted dialog__sub" }, "It starts in setup, with its first branch and its join code."),
+          NEW_COMPANY_FIELDS.map(([heading, list]) => h("fieldset", { key: heading, className: "newCompany__group" },
+            h("legend", { className: "setupHeading" }, heading),
+            h("div", { className: "detailGrid" }, list.map(input)))),
+          error.text && !NEW_COMPANY_FIELDS.flatMap(([, list]) => list).some(([k]) => k === fieldKeyOf(error.field))
+            && h("div", { className: "loginError", role: "alert", style: { margin: "0 0 16px" } }, error.text),
+          h("div", { className: "dialog__actions" },
+            h("button", { type: "button", className: "secondaryBtn", onClick: onCancel, disabled: saving }, "Cancel"),
+            h("button", { type: "submit", className: "primaryBtn", disabled: saving }, saving ? "Creating…" : "Create company"))));
 }
 
 // The filters above the list, in order. Live, In setup and Paused are where a
@@ -697,7 +754,8 @@ function CompanyListScreen({ companies, onCreated }) {
           onClick: () => setFilter(filter === key ? "all" : key) }))),
 
     creating && h(NewCompanyForm, {
-      onCreated: (company) => { onCreated(company); setCreating(false); toast(`${company.name} was created.`); open(company); },
+      onCreated: (company) => { onCreated(company); toast(`${company.name} was created.`); },
+      onDone: (company) => { setCreating(false); open(company); },
       onCancel: () => setCreating(false),
     }),
 
@@ -953,6 +1011,85 @@ function FirstBranchForm({ id, onOpened }) {
     err && h("div", { className: "loginError", role: "alert" }, err));
 }
 
+// Approves a pending sign-up as the company's first Exec, or declines it,
+// after asking first for a decline. Resolves to the message to show, or null
+// when nothing was done; { error } when the Worker refused.
+async function decideSignup(id, person, approve) {
+  if (!approve && !(await appConfirm({
+    title: `Decline ${person.name}?`, message: `${person.name} (${person.username}) is removed and cannot sign in.`,
+    confirmLabel: "Decline", danger: true,
+  }))) return null;
+  const r = await adminRequest(`/admin/companies/${encodeURIComponent(id)}/signups/${encodeURIComponent(person.id)}`,
+    { method: approve ? "POST" : "DELETE" });
+  if (!r.ok) return { error: r.message };
+  return { done: approve ? `${person.name} is now the Exec.`
+    : r.body.removed ? `${person.name}'s sign-up was declined.`
+    : `${person.name}'s sign-up was declined. Their account is kept, deactivated, because records point at it.` };
+}
+
+// Getting started, in order: the company and its first branch, the Exec
+// signing up with the branch's join code, approving the Exec, and the Exec
+// launching. The step that is next is highlighted, with what to do right there.
+function CompanyStart({ id, company, onChanged }) {
+  const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { staff, branches }
+  const [reload, setReload] = React.useState(0);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
+  React.useEffect(() => {
+    let live = true;
+    adminRequest(`/admin/companies/${encodeURIComponent(id)}/staff`).then((r) => {
+      if (live) setState(r.ok ? { staff: r.body.staff, branches: r.body.branches } : { error: r.message });
+    });
+    return () => { live = false; };
+  }, [id, reload]);
+  if (state === undefined) return null;
+  if (state.error) return h("div", { className: "loginError", role: "alert" }, state.error);
+  const { staff, branches } = state;
+  const first = branches[0] || null;
+  const exec = staff.find((s) => s.role === "Exec" && s.active);
+  const waiting = staff.filter((s) => s.pendingApprovalSince);
+  const decide = async (person, approve) => {
+    setBusy(true); setErr("");
+    const out = await decideSignup(id, person, approve);
+    setBusy(false);
+    if (!out) return;
+    if (out.error) { setErr(out.error); return; }
+    toast(out.done);
+    setReload((n) => n + 1);
+    onChanged();
+  };
+  const steps = [
+    { key: "made", title: "Company and first branch created", done: !!first,
+      body: first ? `${first.name} is its first branch.` : "This company has no branch yet. Open its first branch under Staff." },
+    { key: "signup", title: "Exec signs up with the code", done: !!exec || waiting.length > 0,
+      body: first && h(React.Fragment, null,
+        h(JoinCodeChip, { code: first.joinCode }),
+        h("p", { className: "muted step__why" }, "Send this code to the company's Exec to sign up.")) },
+    { key: "approve", title: "Approve the Exec", done: !!exec,
+      body: exec ? `${exec.name} is the Exec.`
+        : waiting.length ? h("div", { className: "startWaiting" }, waiting.map((p) => h("div", { key: p.id, className: "startWaiting__row" },
+            h("span", null, h("b", null, p.name), " ", h("span", { className: "muted" }, p.username)),
+            h("button", { type: "button", className: "primaryBtn", disabled: busy, onClick: () => decide(p, true) }, "Approve as Exec"),
+            h("button", { type: "button", className: "secondaryBtn", disabled: busy, onClick: () => decide(p, false) }, "Decline"))))
+        : "Once the Exec signs up, approve them here." },
+    { key: "launch", title: "Company launches (done by the Exec)", done: !!company.launchedAt,
+      body: company.launchedAt ? "Launched." : "The Exec finishes setup in fleetr, then launches. Nothing to do here." },
+  ];
+  const current = steps.findIndex((x) => !x.done);
+  return h("section", { className: "detailSection" },
+    h("h2", { className: "sectionTitle" }, "Getting started"),
+    h("ol", { className: "steps startSteps" }, steps.map((x, i) => h("li", {
+      key: x.key, className: `step step--${x.done ? "done" : "left"}${i === current ? " step--current" : ""}`,
+      "aria-current": i === current ? "step" : undefined,
+    },
+      h("span", { className: "step__node", "aria-hidden": "true" }, x.done ? h(Icon, { name: "check", size: 14 }) : String(i + 1)),
+      h("div", { className: "step__body" },
+        h("div", { className: "step__title" }, x.title, h("span", { className: "step__state" }, x.done ? "Done" : i === current ? "Next" : "Later")),
+        (i === current || (x.done && typeof x.body === "string")) && x.body
+          && (typeof x.body === "string" ? h("div", { className: "muted step__why" }, x.body) : h("div", { className: "step__action" }, x.body)))))),
+    err && h("div", { className: "loginError", role: "alert" }, err));
+}
+
 const signedUpOn = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
 
 // Read only, apart from approving or declining a pending sign-up. HQ approves
@@ -988,25 +1125,16 @@ function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
 
   const act = async (person, approve) => {
     if (approve && !hasShare) return;
-    if (!approve && !(await appConfirm({
-      title: `Decline ${person.name}?`, message: `${person.name} (${person.username}) is removed and cannot sign in.`,
-      confirmLabel: "Decline", danger: true,
-    }))) return;
     setBusyId(person.id);
     setActErr("");
     setActMsg("");
-    adminRequest(`/admin/companies/${encodeURIComponent(id)}/signups/${encodeURIComponent(person.id)}`,
-      { method: approve ? "POST" : "DELETE" })
-      .then((r) => {
-        if (!r.ok) { setActErr(r.message); return; }
-        const done = approve ? `${person.name} is now the Exec.`
-          : r.body.removed ? `${person.name}'s sign-up was declined.`
-          : `${person.name}'s sign-up was declined. Their account is kept, deactivated, because records point at it.`;
-        setActMsg(done);
-        toast(done);
-        refresh();
-      })
-      .finally(() => setBusyId(null));
+    const out = await decideSignup(id, person, approve);
+    setBusyId(null);
+    if (!out) return;
+    if (out.error) { setActErr(out.error); return; }
+    setActMsg(out.done);
+    toast(out.done);
+    refresh();
   };
 
   const body = () => {
@@ -1025,6 +1153,7 @@ function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
             "Set this company's revenue share before approving its first Exec. ",
             h("button", { type: "button", className: "linkBtn", onClick: onSetRevenueShare }, "Set the revenue share")),
           h("table", { className: "companyTable staffTable" },
+              h("colgroup", null, ["26%", "22%", "13%", "13%", "11%", "11%", "auto"].map((w, i) => h("col", { key: i, style: { width: w } }))),
               h("thead", null,
                 h("tr", null,
                   ["Name", "Email", "Role", "Branch", "Status", "Signed up", ""].map((c, i) =>
@@ -1036,16 +1165,17 @@ function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
                     h("td", { "data-label": "Name" }, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
                       h("div", null, s.name, h("div", { className: "muted small" }, s.username)))),
                     h("td", { "data-label": "Email" }, s.recoveryEmail || h("span", { className: "muted" }, "None")),
-                    h("td", { "data-label": "Role" }, s.role),
+                    // Waiting to be approved as the first Exec: not a role yet.
+                    h("td", { "data-label": "Role", className: "nowrap" }, pending && !hasExec ? "Waiting for approval" : s.role),
                     h("td", { "data-label": "Branch" }, branchName(s)),
-                    h("td", { "data-label": "Status" }, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
+                    h("td", { "data-label": "Status", className: "nowrap" }, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
                       pending ? "Pending" : s.active ? "Approved" : "Deactivated")),
-                    h("td", { "data-label": "Signed up" }, signedUpOn(s.createdAt)),
+                    h("td", { "data-label": "Signed up", className: "nowrap" }, signedUpOn(s.createdAt)),
                     h("td", { "data-label": "" }, pending && h("div", { className: "staffActions" },
                       !hasExec && h("button", { type: "button", className: "primaryBtn staffApprove", disabled: busyId !== null || !hasShare,
                         title: hasShare === false ? "Set the revenue share first" : undefined,
                         onClick: () => act(s, true) }, busyId === s.id ? "Working…" : "Approve as Exec"),
-                      h("button", { type: "button", className: "linkBtn", disabled: busyId !== null,
+                      h("button", { type: "button", className: "secondaryBtn", disabled: busyId !== null,
                         onClick: () => act(s, false) }, "Decline"))));
                 })))),
       hasExec && staff.some((s) => s.pendingApprovalSince) && h("p", { className: "muted" },
@@ -1298,10 +1428,6 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
           value: draft[f.key], disabled: saving, onChange: edit(f.key),
         }));
 
-  const copyCode = () => {
-    if (!company.joinCode || !navigator.clipboard) return;
-    navigator.clipboard.writeText(company.joinCode).then(() => toast("Join code copied."), () => {});
-  };
   const contact = [company.contactName, company.contactEmail, company.contactPhone].filter(Boolean).join(" · ");
   const TABS = [["setup", "Setup"], ["details", "Details"], ["staff", "Staff"], ["features", "Features"], ["billing", "Billing"], ["danger", "Danger zone"]];
 
@@ -1314,13 +1440,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
         h("div", { className: "hero__badges" },
           h(StatusBadge, { status: company.status }), h(SetupBadge, { company }),
           company.planTier && h("span", { className: "pill pill--setup" }, company.planTier)),
-        h("div", { className: "muted hero__contact" }, contact || "No contact on record")),
-      h("div", { className: "hero__code" },
-        h("span", { className: "hero__codeLabel" }, "Join code"),
-        h("div", { className: "codeChip" },
-          h("span", null, company.joinCode || "None"),
-          company.joinCode && h("button", { type: "button", className: "iconBtn", "aria-label": "Copy join code", title: "Copy", onClick: copyCode },
-            h(Icon, { name: "copy", size: 15 }))))),
+        h("div", { className: "muted hero__contact" }, contact || "No contact on record"))),
 
     h("div", { className: "tabs", role: "tablist", "aria-label": "Company" },
       TABS.map(([key, label]) => h("button", {
@@ -1338,6 +1458,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
           !dirty && !saveMsg && h("span", { className: "muted" }, "No changes")),
         saveMsg && h("div", { className: saveMsg.ok ? "successMsg" : "loginError", role: "status" }, saveMsg.text))),
 
+    tab === "setup" && h(CompanyStart, { key: `start-${setupKey}`, id, company, onChanged: () => setSetupKey((n) => n + 1) }),
     tab === "setup" && h(SetupProgress, { key: setupKey, id }),
 
     tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1), onSetRevenueShare: () => setTab("billing") }),
@@ -2002,13 +2123,22 @@ const css = `
 .staffActions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;white-space:nowrap}
 /* A company's staff: as wide as its card and no wider. Long names and
    addresses wrap; on a narrow screen each person is a card of label, value. */
-.staffTable td{overflow-wrap:anywhere}
-.staffApprove{padding:8px 14px;border-radius:10px;font-size:0.85rem}
+/* Words never break inside: Agent, Pending and dates stay whole. Columns
+   have widths; a long email wraps at its own points. */
+.staffTable{table-layout:fixed}
+.staffTable td{overflow-wrap:normal;word-break:normal}
+.staffTable td:nth-child(2){overflow-wrap:anywhere}
+.staffTable .nowrap{white-space:nowrap}
+.staffActions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.staffApprove,.staffActions .secondaryBtn{padding:8px 14px;border-radius:10px;font-size:0.85rem}
 @media (max-width:720px){
   .staffTable thead{display:none}
   .staffTable,.staffTable tbody,.staffTable tr,.staffTable td{display:block;width:100%}
-  .staffTable tr{padding:10px 0;border-bottom:1px solid var(--border)}
-  .staffTable tbody tr:last-child{border-bottom:0}
+  /* Each person a card of their own. */
+  .staffTable tr{box-sizing:border-box;padding:12px 14px;margin:0 0 10px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
+  .staffTable tbody tr:last-child{margin-bottom:0}
+  .staffTable tbody tr:hover{background:var(--card)}
+  .staffTable td:first-child{padding-left:0}
   .staffTable td{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;border-bottom:0;text-align:right}
   .staffTable td::before{content:attr(data-label);flex:none;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--muted);text-align:left}
   .staffTable td[data-label=""]{justify-content:flex-start}
@@ -2286,8 +2416,6 @@ html{scrollbar-gutter:stable}
 .hero__name{margin:0 0 8px}
 .hero__badges{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .hero__contact{font-size:0.88rem}
-.hero__code{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-.hero__codeLabel{font-size:0.72rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted)}
 .codeChip{display:inline-flex;align-items:center;gap:4px;padding:4px 4px 4px 12px;border:1px dashed rgba(31,30,29,0.25);border-radius:10px;
   font-weight:700;letter-spacing:0.14em;background:var(--bg)}
 .tabs{display:flex;gap:2px;overflow-x:auto;padding:4px;margin:0 0 16px;background:var(--card);border:1px solid var(--border);border-radius:999px;width:max-content;max-width:100%}
@@ -2318,6 +2446,18 @@ html{scrollbar-gutter:stable}
 .step__state{font-size:0.75rem;font-weight:600;color:var(--muted)}
 .step--done .step__state{color:#2E7D3A}
 .step__why{font-size:0.88rem;margin-top:2px}
+/* Getting started: the step that is next stands out, its action under it. */
+.startSteps .step--current{margin:4px -12px;padding:10px 12px;border-radius:12px;background:var(--terracotta-soft)}
+.startSteps .step--current .step__node{box-shadow:inset 0 0 0 1.5px var(--terracotta);font-weight:700}
+.startSteps .step__node{font-size:0.8rem}
+.step__action{margin-top:8px;display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.startWaiting{display:flex;flex-direction:column;gap:8px;width:100%}
+.startWaiting__row{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.startWaiting__row > span{margin-right:auto}
+.codeChip__copy{padding:6px 10px;font-size:0.85rem}
+.dialog--wide{max-width:640px;max-height:calc(100vh - 32px);overflow:auto}
+.newCompany__group{border:0;margin:0 0 8px;padding:0}
+.fieldError{margin:-10px 0 12px;font-size:0.85rem;color:#c0392b}
 
 /* Inputs, as the staff app's boxes. */
 .loginInput{border-radius:10px;border-color:rgba(31,30,29,0.14);box-shadow:0 1px 2px rgba(31,30,29,0.04);transition:border-color .15s,box-shadow .15s}
