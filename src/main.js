@@ -2030,7 +2030,7 @@ const css = `
 .loginBtn{font:inherit;font-weight:600;color:var(--text);background:var(--terracotta);border:0;
   border-radius:999px;padding:11px;cursor:pointer;margin-top:4px}
 .loginBtn:hover:not(:disabled){background:var(--terracotta-hover)}
-.loginBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.loginBtn:focus-visible{outline:2px solid #F4845F;outline-offset:2px}
 .loginBtn:disabled{opacity:0.6;cursor:default}
 .loginError{margin-top:16px;padding:10px 12px;font-size:0.9rem;font-weight:500;
   background:rgba(192,57,43,0.08);border-left:3px solid #c0392b;border-radius:6px}
@@ -2053,7 +2053,7 @@ const css = `
 .primaryBtn{font:inherit;font-weight:600;color:var(--text);background:var(--terracotta);border:0;
   border-radius:999px;padding:9px 18px;cursor:pointer;white-space:nowrap}
 .primaryBtn:hover:not(:disabled){background:var(--terracotta-hover)}
-.primaryBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.primaryBtn:focus-visible{outline:2px solid #F4845F;outline-offset:2px}
 .primaryBtn:disabled{opacity:0.6;cursor:default}
 
 .newCompany{margin-bottom:24px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
@@ -2213,7 +2213,7 @@ html{scrollbar-gutter:stable}
 .motionBtn__fill{position:absolute;z-index:-1;left:5px;top:5px;bottom:5px;width:36px;border-radius:999px;background:var(--ink);transition:width .45s cubic-bezier(.22,1,.36,1)}
 .motionBtn__icon{width:36px;height:36px;display:grid;place-items:center;color:#F9F9F7;flex:none}
 @media (hover:hover){.motionBtn:hover{color:#F9F9F7}.motionBtn:hover .motionBtn__fill{width:calc(100% - 10px)}}
-.motionBtn:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.motionBtn:focus-visible{outline:2px solid #F4845F;outline-offset:2px}
 
 /* Stat tiles, as the staff app's Home: click one to filter by it. */
 .statRow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
@@ -2370,6 +2370,15 @@ html{scrollbar-gutter:stable}
   .toast,.dialog,.dialogBackdrop{animation:none}
   .motionBtn__fill,.progress__bar span{transition:none}
 }
+/* Checkboxes and radio buttons are terracotta, and a focus ring shows for the
+   keyboard only. A text field marks its focus with its border, because a
+   browser counts every click into one as :focus-visible. */
+input[type="checkbox"], input[type="radio"]{ accent-color: #F4845F; }
+:focus:not(:focus-visible){ outline: none; }
+:focus-visible{ outline: 2px solid #F4845F; outline-offset: 2px; }
+[tabindex="-1"]:focus-visible{ outline: none; }
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([readonly]):focus,
+textarea:not([readonly]):focus{ outline: none; border-color: #F4845F; }
 `;
 const style = document.createElement("style");
 style.textContent = css;
