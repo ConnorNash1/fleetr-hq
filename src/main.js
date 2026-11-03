@@ -301,9 +301,9 @@ function skSetup() {
 }
 
 function skStaff() {
-  return skTable(["Name", "Email", "Role", "Branch", "Status", "Signed up", ""],
+  return skTable(["Name", "Role", "Branch", "Status"],
     [h("div", { className: "nameCell" }, skB("span", "avatar", "AM"), h("div", null, skT("Alex Morgan"), h("div", { className: "muted small" }, skT("amorgan")))),
-      "alex@example.com", ["Exec", "Agent"], ["All branches", "Airport"], skB("span", "pill pill--live", "Approved"), "Oct 29, 2026", ""], 3, undefined, "companyTable staffTable");
+      ["Exec", "Agent"], ["All branches", "Airport"], skB("span", "pill pill--live", "Approved")], 3, undefined, "companyTable staffTable");
 }
 
 function skRevenue() {
@@ -1144,6 +1144,8 @@ function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
     const branchName = (s) => (s.role === "Exec" ? "All branches"
       : (branches.find((b) => b.id === s.locationId) || { name: "" }).name);
     const hasExec = staff.some((s) => s.role === "Exec" && s.active);
+    const waiting = staff.filter((s) => s.pendingApprovalSince);
+    const approved = staff.filter((s) => !s.pendingApprovalSince);
     return h(React.Fragment, null,
       branches.length === 0 && h(FirstBranchForm, { id, onOpened: refresh }),
       staff.length === 0
@@ -1152,34 +1154,40 @@ function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
           !hasExec && hasShare === false && staff.some((s) => s.pendingApprovalSince) && h("div", { className: "loginError", role: "status" },
             "Set this company's revenue share before approving its first Exec. ",
             h("button", { type: "button", className: "linkBtn", onClick: onSetRevenueShare }, "Set the revenue share")),
-          h("table", { className: "companyTable staffTable" },
-              h("colgroup", null, ["26%", "22%", "13%", "13%", "11%", "11%", "auto"].map((w, i) => h("col", { key: i, style: { width: w } }))),
+          // Waiting for approval: a card each, above the list, with what to
+          // do right there. HQ approves only a company's first Exec; once it
+          // has one, that Exec approves the rest from fleetr.
+          waiting.length > 0 && h("div", { className: "waitList" }, waiting.map((s) => h("div", { key: s.id, className: "waitCard" },
+            h("div", { className: "waitCard__who" },
+              h("div", { className: "waitCard__line" },
+                h("b", null, s.name), h("span", { className: "muted" }, s.username),
+                branchName(s) && h("span", null, branchName(s)),
+                h("span", { className: "muted" }, `signed up ${signedUpOn(s.createdAt)}`),
+                h("span", { className: "pill pill--paused" }, "Waiting for approval")),
+              h("div", { className: "waitCard__email muted" }, s.recoveryEmail || "No email")),
+            h("div", { className: "waitCard__actions" },
+              !hasExec && h("button", { type: "button", className: "primaryBtn", disabled: busyId !== null || !hasShare,
+                title: hasShare === false ? "Set the revenue share first" : undefined,
+                onClick: () => act(s, true) }, busyId === s.id ? "Working\u2026" : "Approve as Exec"),
+              h("button", { type: "button", className: "secondaryBtn", disabled: busyId !== null,
+                onClick: () => act(s, false) }, "Decline"))))),
+          // Everyone else: who, role, branch and status. Nothing to press.
+          approved.length > 0 && h("table", { className: "companyTable staffTable" },
+              h("colgroup", null, ["40%", "18%", "24%", "18%"].map((w, i) => h("col", { key: i, style: { width: w } }))),
               h("thead", null,
                 h("tr", null,
-                  ["Name", "Email", "Role", "Branch", "Status", "Signed up", ""].map((c, i) =>
+                  ["Name", "Role", "Branch", "Status"].map((c, i) =>
                     h("th", { key: i, scope: "col" }, c)))),
               h("tbody", null,
-                staff.map((s) => {
-                  const pending = !!s.pendingApprovalSince;
-                  return h("tr", { key: s.id },
-                    h("td", { "data-label": "Name" }, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
-                      h("div", null, s.name, h("div", { className: "muted small" }, s.username)))),
-                    h("td", { "data-label": "Email" }, s.recoveryEmail || h("span", { className: "muted" }, "None")),
-                    // Waiting to be approved as the first Exec: not a role yet.
-                    h("td", { "data-label": "Role", className: "nowrap" }, pending && !hasExec ? "Waiting for approval" : s.role),
-                    h("td", { "data-label": "Branch" }, branchName(s)),
-                    h("td", { "data-label": "Status", className: "nowrap" }, h("span", { className: `pill pill--${pending ? "paused" : s.active ? "live" : "setup"}` },
-                      pending ? "Pending" : s.active ? "Approved" : "Deactivated")),
-                    h("td", { "data-label": "Signed up", className: "nowrap" }, signedUpOn(s.createdAt)),
-                    h("td", { "data-label": "" }, pending && h("div", { className: "staffActions" },
-                      !hasExec && h("button", { type: "button", className: "primaryBtn staffApprove", disabled: busyId !== null || !hasShare,
-                        title: hasShare === false ? "Set the revenue share first" : undefined,
-                        onClick: () => act(s, true) }, busyId === s.id ? "Working…" : "Approve as Exec"),
-                      h("button", { type: "button", className: "secondaryBtn", disabled: busyId !== null,
-                        onClick: () => act(s, false) }, "Decline"))));
-                })))),
-      hasExec && staff.some((s) => s.pendingApprovalSince) && h("p", { className: "muted" },
-        "This company has an Exec, who approves pending staff from fleetr. HQ can still decline a sign-up here."),
+                approved.map((s) => h("tr", { key: s.id },
+                  h("td", { "data-label": "Name" }, h("div", { className: "nameCell" }, h(Avatar, { name: s.name }),
+                    h("div", { className: "nameCell__text" }, s.name, h("div", { className: "muted small" }, s.username)))),
+                  h("td", { "data-label": "Role" }, s.role),
+                  h("td", { "data-label": "Branch" }, branchName(s)),
+                  h("td", { "data-label": "Status" }, h("span", { className: `pill pill--${s.active ? "live" : "setup"}` },
+                    s.active ? "Approved" : "Deactivated"))))))),
+      hasExec && waiting.length > 0 && h("p", { className: "muted" },
+        "This company has an Exec, who approves new staff from fleetr. HQ can still decline a sign-up here."),
       actMsg && h("div", { className: "successMsg", role: "status" }, actMsg),
       actErr && h("div", { className: "loginError", role: "alert" }, actErr));
   };
@@ -2120,17 +2128,23 @@ const css = `
 .setupItem{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--border)}
 .setupDone,.setupLeft{flex:0 0 44px;font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em}
 .setupLeft{color:var(--muted)}
-.staffActions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;white-space:nowrap}
 /* A company's staff: as wide as its card and no wider. Long names and
    addresses wrap; on a narrow screen each person is a card of label, value. */
-/* Words never break inside: Agent, Pending and dates stay whole. Columns
-   have widths; a long email wraps at its own points. */
+/* Staff: words never break inside, nothing leaves its card. Columns have
+   widths; a long name wraps between words. */
 .staffTable{table-layout:fixed}
 .staffTable td{overflow-wrap:normal;word-break:normal}
-.staffTable td:nth-child(2){overflow-wrap:anywhere}
-.staffTable .nowrap{white-space:nowrap}
-.staffActions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
-.staffApprove,.staffActions .secondaryBtn{padding:8px 14px;border-radius:10px;font-size:0.85rem}
+.nameCell__text{min-width:0}
+/* Waiting for approval: a card each, who on the left, what to do on the right;
+   the buttons go under on a narrow screen. */
+.waitList{display:grid;gap:10px;margin:0 0 18px}
+.waitCard{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
+.waitCard__who{flex:1 1 280px;min-width:0}
+.waitCard__line{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
+.waitCard__line > span{white-space:nowrap}
+.waitCard__email{margin-top:4px;font-size:0.9rem;overflow-wrap:anywhere}
+.waitCard__actions{display:flex;flex-wrap:wrap;gap:8px;flex:0 0 auto}
+.waitCard__actions .primaryBtn,.waitCard__actions .secondaryBtn{padding:8px 14px;border-radius:10px;font-size:0.85rem;white-space:nowrap}
 @media (max-width:720px){
   .staffTable thead{display:none}
   .staffTable,.staffTable tbody,.staffTable tr,.staffTable td{display:block;width:100%}
