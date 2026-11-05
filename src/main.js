@@ -579,12 +579,19 @@ function useHashRoute() {
   if (hash === "#/dashboard") return { name: "dashboard" };
   const b = hash.match(/^#\/billing(?:\/([^/?#]+)\/(\d{4}-\d{2}))?$/);
   if (b) return b[1] ? { name: "billingCompany", id: decodeURIComponent(b[1]), month: b[2] } : { name: "billing" };
-  const m = hash.match(/^#\/company\/([^/?#]+)$/);
-  return m ? { name: "company", id: decodeURIComponent(m[1]) } : { name: "list" };
+  // #/company/<id>/staff opens the company on its Staff tab, as the first
+  // Exec sign-up email links to it.
+  const m = hash.match(/^#\/company\/([^/?#]+)(?:\/(staff))?$/);
+  return m ? { name: "company", id: decodeURIComponent(m[1]), tab: m[2] || null } : { name: "list" };
 }
 
 // ─── Screens: signed in ───────────────────────────────────────────────────────
 const STATUS_LABELS = { trial: "Trial", active: "Active", suspended: "Suspended" };
+
+// "1 waiting for approval": sign-ups waiting for fleetr to approve them as a
+// company's first Exec. Nothing when there are none.
+const waitingBadge = (n) => (n > 0
+  ? h("span", { className: "pill pill--paused waitBadge" }, `${n} waiting for approval`) : null);
 
 function StatusBadge({ status }) {
   return h("span", { className: `badge badge-${STATUS_LABELS[status] ? status : "unknown"}` },
@@ -796,7 +803,8 @@ function CompanyListScreen({ companies, onCreated }) {
                       h("div", { className: "nameCell" },
                         h(Avatar, { name: c.name }),
                         h("a", { className: "companyLink", href: `#/company/${encodeURIComponent(c.id)}`,
-                          onClick: (e) => e.stopPropagation() }, c.name))),
+                          onClick: (e) => e.stopPropagation() }, c.name),
+                        waitingBadge(c.waitingForApproval))),
                     h("td", null, h(StatusBadge, { status: c.status })),
                     h("td", null, h(SetupBadge, { company: c })),
                     h("td", null, c.planTier || h("span", { className: "muted" }, "Not set")),
@@ -1094,8 +1102,15 @@ const signedUpOn = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, {
 
 // Read only, apart from approving or declining a pending sign-up. HQ approves
 // only the company's first Exec; once it has one, the Exec approves the rest.
-function CompanyStaff({ id, company, onChanged, onSetRevenueShare }) {
+function CompanyStaff({ id, company, onChanged, onSetRevenueShare, onWaiting }) {
   const [state, setState] = React.useState(undefined);   // undefined loading, { error } or { staff, branches }
+  // The Staff tab's badge follows the list: first-Exec sign-ups, only while
+  // the company has no active Exec.
+  React.useEffect(() => {
+    if (!onWaiting || !state || state.error) return;
+    const exec = state.staff.some((s) => s.role === "Exec" && s.active);
+    onWaiting(exec ? 0 : state.staff.filter((s) => s.pendingApprovalSince).length);
+  }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busyId, setBusyId] = React.useState(null);
   const [actErr, setActErr] = React.useState("");
   const [actMsg, setActMsg] = React.useState("");
@@ -1288,7 +1303,7 @@ function DeleteCompany({ id, company, onDeleted }) {
           err && h("div", { className: "loginError", role: "alert" }, err)));
 }
 
-function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
+function CompanyDetailScreen({ id, startTab, onUpdated, onDeleted }) {
   // undefined while loading; { error } when the load failed.
   const [loaded,   setLoaded]   = React.useState(undefined);
   const [draft,    setDraft]    = React.useState(null);
@@ -1302,7 +1317,10 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
   const [featMsg,  setFeatMsg]  = React.useState("");
   // Bumped when a staff or branch change could move the setup checklist.
   const [setupKey, setSetupKey] = React.useState(0);
-  const [tab, setTab] = React.useState("setup");
+  const [tab, setTab] = React.useState(startTab || "setup");
+  // Sign-ups waiting for fleetr to approve them as first Exec: from the
+  // company as loaded, then from the Staff tab as it changes.
+  const [waitingCount, setWaitingCount] = React.useState(null);
   const unsaved = Object.keys(featDraft).length;
 
   // Warn before leaving with unsaved feature changes: closing or reloading
@@ -1454,7 +1472,8 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
       TABS.map(([key, label]) => h("button", {
         key, type: "button", role: "tab", "aria-selected": tab === key, className: `tab${tab === key ? " tab--on" : ""}${key === "danger" ? " tab--danger" : ""}`,
         onClick: () => setTab(key),
-      }, label, key === "features" && unsaved > 0 && h("span", { className: "tab__dot", "aria-label": "unsaved changes" })))),
+      }, label, key === "features" && unsaved > 0 && h("span", { className: "tab__dot", "aria-label": "unsaved changes" }),
+        key === "staff" && waitingBadge(waitingCount != null ? waitingCount : company.waitingForApproval)))),
 
     tab === "details" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Details"),
@@ -1469,7 +1488,7 @@ function CompanyDetailScreen({ id, onUpdated, onDeleted }) {
     tab === "setup" && h(CompanyStart, { key: `start-${setupKey}`, id, company, onChanged: () => setSetupKey((n) => n + 1) }),
     tab === "setup" && h(SetupProgress, { key: setupKey, id }),
 
-    tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1), onSetRevenueShare: () => setTab("billing") }),
+    tab === "staff" && h(CompanyStaff, { id, company, onChanged: () => setSetupKey((n) => n + 1), onSetRevenueShare: () => setTab("billing"), onWaiting: setWaitingCount }),
 
     tab === "features" && h("section", { className: "detailSection" },
       h("h2", { className: "sectionTitle" }, "Features"),
@@ -2045,7 +2064,7 @@ function SignedInShell({ loading, companies, onCreated, onUpdated, onDeleted, on
         route.name === "billing" ? h(BillingScreen) :
         route.name === "billingCompany" ? h(BillingCompanyScreen, { key: `${route.id}:${route.month}`, id: route.id, month: route.month }) :
         route.name === "company"
-          ? h(CompanyDetailScreen, { key: route.id, id: route.id, onUpdated, onDeleted: (gone) => {
+          ? h(CompanyDetailScreen, { key: route.id, id: route.id, startTab: route.tab, onUpdated, onDeleted: (gone) => {
               // Nothing is left to save, so leave without asking.
               leaveGuard = null;
               onDeleted(gone);
@@ -2138,6 +2157,7 @@ const css = `
 /* Waiting for approval: a card each, who on the left, what to do on the right;
    the buttons go under on a narrow screen. */
 .waitList{display:grid;gap:10px;margin:0 0 18px}
+.waitBadge{margin-left:8px;white-space:nowrap;font-size:0.72rem}
 .waitCard{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:14px 16px;border:1px solid var(--border);border-radius:12px;background:var(--card)}
 .waitCard__who{flex:1 1 280px;min-width:0}
 .waitCard__line{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px}
